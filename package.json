@@ -1,0 +1,19 @@
+{
+  "name": "ainide",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @ainide/shared && concurrently -k \"npm run dev -w @ainide/server\" \"npm run dev -w @ainide/web\"",
+    "build": "npm run build -w @ainide/shared && npm run build -w @ainide/server && npm run build -w @ainide/web",
+    "test": "npm run build -w @ainide/shared && npm run test -w @ainide/server",
+    "typecheck": "npm run build -w @ainide/shared && npm run typecheck -w @ainide/server && npm run typecheck -w @ainide/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.2"
+  }
+}
