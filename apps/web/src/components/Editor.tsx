@@ -5,6 +5,9 @@ import { isDirty, useAppStore } from "../store";
 
 interface EditorProps {
   onSave: (tab: EditorTab) => void;
+  onContentChange: (path: string, content: string) => void;
+  flushAutoSave: (path: string) => Promise<void>;
+  cancelAutoSave: (path: string) => void;
 }
 
 const languageByExtension: Record<string, string> = {
@@ -45,9 +48,12 @@ interface EditorPaneProps {
   tabs: EditorTab[];
   secondaryOpen: boolean;
   onSave: (tab: EditorTab) => void;
+  onContentChange: (path: string, content: string) => void;
+  flushAutoSave: (path: string) => Promise<void>;
+  cancelAutoSave: (path: string) => void;
 }
 
-function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave }: EditorPaneProps) {
+function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange, flushAutoSave, cancelAutoSave }: EditorPaneProps) {
   const active = tabs.find((tab) => tab.path === pane.activePath);
   const focusedPaneId = useAppStore((state) => state.focusedPaneId);
   const updateTab = useAppStore((state) => state.updateTab);
@@ -96,9 +102,11 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave }: EditorPanePro
     return () => window.removeEventListener("dragend", clear);
   }, []);
 
-  const close = (path: string) => {
-    const tab = tabs.find((item) => item.path === path);
+  const close = async (path: string) => {
+    await flushAutoSave(path);
+    const tab = useAppStore.getState().tabs.find((item) => item.path === path);
     if (tab && isDirty(tab) && !window.confirm(`Discard changes to ${tab.name}?`)) return;
+    cancelAutoSave(path);
     closeTab(paneId, path);
   };
 
@@ -144,10 +152,14 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave }: EditorPanePro
         <div className={`tabs ${dropIndex === tabs.length && draggingPath ? "drop-end" : ""}`} role="tablist" aria-label={`${paneId === "primary" ? "Primary" : "Secondary"} editor tabs`} onDragOver={dragOverTabs} onDrop={(event) => dropTab(event)}>
           {tabs.map((tab, index) => (
             <div className={`editor-tab ${tab.path === pane.activePath ? "active" : ""} ${draggingPath === tab.path ? "dragging" : ""} ${dropIndex === index && draggingPath ? "drop-before" : ""}`} data-tab-index={index} key={tab.path} draggable onDragStart={(event) => startDrag(event, tab.path)} onDragEnd={clearDrag}>
-              <button role="tab" aria-selected={tab.path === pane.activePath} onClick={() => { focusPane(); setActivePath(paneId, tab.path); }} title={tab.path}>
+              <button role="tab" aria-selected={tab.path === pane.activePath} onClick={(event) => {
+                focusPane();
+                if (event.shiftKey) { void close(tab.path); return; }
+                setActivePath(paneId, tab.path);
+              }} title={`${tab.path} · Shift-click to close`}>
                 <span className="tab-language">{tab.language === "plaintext" ? "·" : "◆"}</span>{tab.name}{isDirty(tab) && <span className="dirty-dot" />}
               </button>
-              <button className="tab-close" onClick={() => close(tab.path)} aria-label={`Close ${tab.name}`}>×</button>
+              <button className="tab-close" onClick={() => void close(tab.path)} aria-label={`Close ${tab.name}`}>×</button>
             </div>
           ))}
           {tabs.length > 0 && <div className="tab-spacer" />}
@@ -171,7 +183,7 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave }: EditorPanePro
             <>
               <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions"><button onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button><button className="save-mini" onClick={() => onSave(active)}>Save</button></span></div>
               {compare && active.conflict?.externalContent !== undefined && <div className="compare-panel"><div><label>YOUR BUFFER</label><pre>{active.content}</pre></div><div><label>ON DISK</label><pre>{active.conflict.externalContent}</pre></div></div>}
-              <Editor key={active.path} path={active.path} theme="vs-dark" language={active.language} value={active.content} saveViewState onMount={mount} onChange={(value) => updateTab(active.path, { content: value ?? "" })} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", padding: { top: 10 }, scrollBeyondLastLine: false, renderWhitespace: "selection", smoothScrolling: true }} />
+              <Editor key={active.path} path={active.path} theme="vs-dark" language={active.language} value={active.content} saveViewState onMount={mount} onChange={(value) => onContentChange(active.path, value ?? "")} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", padding: { top: 10 }, scrollBeyondLastLine: false, renderWhitespace: "selection", smoothScrolling: true }} />
             </>
           )}
         </div>
@@ -180,17 +192,18 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave }: EditorPanePro
   );
 }
 
-export function EditorSurface({ onSave }: EditorProps) {
+export function EditorSurface({ onSave, onContentChange, flushAutoSave, cancelAutoSave }: EditorProps) {
   const tabs = useAppStore((state) => state.tabs);
   const panes = useAppStore((state) => state.panes);
   const secondaryOpen = useAppStore((state) => state.secondaryOpen);
   const paneIds: EditorPaneId[] = secondaryOpen ? ["primary", "secondary"] : ["primary"];
+  const paneProps = { onSave, onContentChange, flushAutoSave, cancelAutoSave, secondaryOpen };
 
   return <section className={`editor-area ${secondaryOpen ? "split" : ""}`}>
     <div className="editor-layout">
       {paneIds.map((paneId, index) => <div className="editor-pane-slot" key={paneId}>
         {index > 0 && <div className="editor-divider" aria-hidden="true" />}
-        <EditorPane paneId={paneId} pane={panes[paneId]} tabs={panes[paneId].tabPaths.map((path) => tabs.find((tab) => tab.path === path)).filter((tab): tab is EditorTab => Boolean(tab))} secondaryOpen={secondaryOpen} onSave={onSave} />
+        <EditorPane paneId={paneId} pane={panes[paneId]} tabs={panes[paneId].tabPaths.map((path) => tabs.find((tab) => tab.path === path)).filter((tab): tab is EditorTab => Boolean(tab))} {...paneProps} />
       </div>)}
     </div>
   </section>;

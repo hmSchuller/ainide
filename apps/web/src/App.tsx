@@ -9,6 +9,7 @@ import { ReviewSurface } from "./components/ReviewSurface";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, knownProjectSeed, snapshotFromBag } from "./project-ui";
+import { createAutoSaver } from "./auto-save";
 import { findPaneForPath, isDirty, useAppStore } from "./store";
 import type { EditorPaneId, EditorTab } from "./types";
 
@@ -288,9 +289,26 @@ export default function App() {
   };
 
   const saveFile = async (tab: EditorTab) => {
-    if (!token || tab.binary) return;
+    if (!token || tab.binary || tab.error || !isDirty(tab)) return;
     try { await writeFile(tab.path, tab.content, token); updateTab(tab.path, { savedContent: tab.content, conflict: undefined }); setNotice(`${tab.name} saved`, "success"); }
     catch (error) { setNotice(error instanceof Error ? error.message : "Save failed", "error"); }
+  };
+
+  const autoSaver = useMemo(() => createAutoSaver(async (path) => {
+    const state = useAppStore.getState();
+    const tab = state.tabs.find((item) => item.path === path);
+    if (!tab || !state.token || tab.binary || tab.error || !isDirty(tab)) return;
+    try {
+      await writeFile(tab.path, tab.content, state.token);
+      state.updateTab(tab.path, { savedContent: tab.content, conflict: undefined });
+    } catch {
+      // Failed auto-saves stay silent; manual save and close confirm cover the failure path.
+    }
+  }), []);
+
+  const handleContentChange = (path: string, content: string) => {
+    updateTab(path, { content });
+    autoSaver.schedule(path);
   };
 
   const openReference = (path: string, line: number, column?: number) => {
@@ -437,7 +455,12 @@ export default function App() {
       }} />
        <main className="main-column">
           <div className="mode-surface" hidden={mode !== "edit"}>
-            <EditorSurface onSave={(tab) => void saveFile(tab)} />
+            <EditorSurface
+              onSave={(tab) => void saveFile(tab)}
+              onContentChange={handleContentChange}
+              flushAutoSave={(path) => autoSaver.flush(path)}
+              cancelAutoSave={(path) => autoSaver.cancel(path)}
+            />
           </div>
           <div className="mode-surface" hidden={mode !== "review"}>
             <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />
