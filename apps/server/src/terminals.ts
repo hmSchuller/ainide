@@ -31,8 +31,13 @@ export class TerminalManager {
 
   constructor(private readonly getCwd: () => string | undefined, private readonly config: AinideConfig = {}) {}
 
-  list(): TerminalSession[] {
-    return [...this.sessions.values()].map(({ session }) => ({ ...session }));
+  list(projectId?: string): TerminalSession[] {
+    const sessions = [...this.sessions.values()].map(({ session }) => ({ ...session }));
+    return projectId ? sessions.filter((session) => session.projectId === projectId) : sessions;
+  }
+
+  listAliveKinds(projectId: string): TerminalSession["kind"][] {
+    return this.list(projectId).filter((session) => session.alive).map((session) => session.kind);
   }
 
   create(input: { kind?: unknown; title?: unknown; command?: unknown; cols?: unknown; rows?: unknown }): TerminalSession {
@@ -52,6 +57,7 @@ export class TerminalManager {
       command,
       cwd,
       kind,
+      projectId: cwd,
       alive: true,
     };
     ensureSpawnHelperExecutable();
@@ -143,6 +149,12 @@ export class TerminalManager {
         socket.send(JSON.stringify({ type: "error", message: error instanceof Error ? error.message : "Invalid terminal message" }));
       }
     });
+  }
+
+  closeByProject(projectId: string): void {
+    for (const [id, live] of this.sessions) {
+      if (live.session.projectId === projectId) this.remove(id);
+    }
   }
 
   close(): void {

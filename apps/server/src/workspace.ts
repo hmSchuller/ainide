@@ -33,6 +33,10 @@ export class WorkspaceManager {
     return this.workspace;
   }
 
+  get watching(): boolean {
+    return Boolean(this.watcher);
+  }
+
   async validate(rawPath: string): Promise<string> {
     const resolved = await fs.realpath(path.resolve(rawPath));
     const stat = await fs.stat(resolved);
@@ -46,22 +50,42 @@ export class WorkspaceManager {
     this.workspace = { rootPath: resolved, name: path.basename(resolved) || resolved };
     this.recent = [];
     this.patterns = await this.readIgnorePatterns(resolved);
-    this.watcher = chokidar.watch(resolved, { ignoreInitial: true, followSymlinks: false, ignored: (entry) => {
+    await this.startWatcher();
+    this.emit({ type: "workspace_changed", projectId: resolved });
+    await this.refreshGit();
+    return this.workspace;
+  }
+
+  async pause(): Promise<void> {
+    if (this.gitTimer) clearTimeout(this.gitTimer);
+    this.gitTimer = undefined;
+    await this.closeWatcher();
+  }
+
+  async activate(): Promise<void> {
+    const root = this.requireRoot();
+    if (!this.watcher) await this.startWatcher();
+    this.emit({ type: "workspace_changed", projectId: root.rootPath });
+    await this.refreshGit();
+  }
+
+  async close(): Promise<void> {
+    if (this.gitTimer) clearTimeout(this.gitTimer);
+    this.gitTimer = undefined;
+    await this.closeWatcher();
+    this.workspace = undefined;
+  }
+
+  private async startWatcher(): Promise<void> {
+    const root = this.requireRoot();
+    await this.closeWatcher();
+    this.watcher = chokidar.watch(root.rootPath, { ignoreInitial: true, followSymlinks: false, ignored: (entry) => {
       const base = path.basename(entry);
       return ignoredNames.has(base);
     } });
     for (const event of ["add", "change", "unlink", "addDir", "unlinkDir"] as const) {
       this.watcher.on(event, (changedPath) => this.recordChange(event, changedPath));
     }
-    this.eventHandler({ type: "workspace_changed" });
-    await this.refreshGit();
-    return this.workspace;
-  }
-
-  async close(): Promise<void> {
-    if (this.gitTimer) clearTimeout(this.gitTimer);
-    await this.closeWatcher();
-    this.workspace = undefined;
   }
 
   private async closeWatcher(): Promise<void> {
@@ -69,6 +93,10 @@ export class WorkspaceManager {
     const watcher = this.watcher;
     this.watcher = undefined;
     await watcher.close();
+  }
+
+  private emit(event: WorkspaceEvent): void {
+    this.eventHandler(event);
   }
 
   private async readIgnorePatterns(root: string): Promise<RegExp[]> {
@@ -91,8 +119,9 @@ export class WorkspaceManager {
     if (!relative || relative.startsWith("..") || ignoredNames.has(path.basename(relative))) return;
     const type: RecentChange["type"] = event === "add" || event === "addDir" ? "created" : event === "unlink" || event === "unlinkDir" ? "deleted" : "changed";
     this.recent = [{ path: relative, type, timestamp: Date.now() }, ...this.recent.filter((item) => item.path !== relative)].slice(0, 200);
-    this.eventHandler({ type: "file_changed", path: relative, change: type });
-    this.eventHandler({ type: "workspace_changed" });
+    const projectId = this.workspace.rootPath;
+    this.emit({ type: "file_changed", projectId, path: relative, change: type });
+    this.emit({ type: "workspace_changed", projectId });
     if (this.gitTimer) clearTimeout(this.gitTimer);
     this.gitTimer = setTimeout(() => void this.refreshGit(), 150);
   }
@@ -100,7 +129,7 @@ export class WorkspaceManager {
   async refreshGit(): Promise<GitStatus | undefined> {
     if (!this.workspace) return undefined;
     const status = await getGitStatus(this.workspace.rootPath);
-    this.eventHandler({ type: "git_changed", status });
+    this.emit({ type: "git_changed", projectId: this.workspace.rootPath, status });
     return status;
   }
 

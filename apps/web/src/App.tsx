@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import type { FileEntry, TerminalSession, Workspace } from "@ainide/shared";
-import { createTerminal, getGitStatus, getSession, getTerminals, getWorkspace, listFiles, openWorkspace, parseEvent, readFile, searchFiles, startReview, writeFile, websocketUrl } from "./api";
+import type { FileEntry, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
+import { missingTerminalKinds } from "@ainide/shared";
+import { closeProject, createTerminal, getGitStatus, getSession, getTerminals, listFiles, openProject, parseEvent, readFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
 import { EditorSurface, language } from "./components/Editor";
 import { Explorer } from "./components/Explorer";
+import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ReviewSurface } from "./components/ReviewSurface";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { WorkspacePicker } from "./components/WorkspacePicker";
+import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, knownProjectSeed, snapshotFromBag } from "./project-ui";
 import { findPaneForPath, isDirty, useAppStore } from "./store";
 import type { EditorPaneId, EditorTab } from "./types";
 
@@ -26,9 +29,17 @@ function fuzzy(value: string, query: string): boolean {
   return true;
 }
 
+function leavingSnapshot(): ProjectSessionSnapshot | undefined {
+  const state = useAppStore.getState();
+  return state.workspace ? snapshotFromBag(state.workspace, captureProjectBag(state)) : undefined;
+}
+
 export default function App() {
   const token = useAppStore((state) => state.token);
   const workspace = useAppStore((state) => state.workspace);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const openProjects = useAppStore((state) => state.openProjects);
+  const knownProjects = useAppStore((state) => state.knownProjects);
   const mode = useAppStore((state) => state.mode);
   const git = useAppStore((state) => state.git);
   const reviewScope = useAppStore((state) => state.review.scope);
@@ -42,7 +53,6 @@ export default function App() {
   const recentChanges = useAppStore((state) => state.recentChanges);
   const terminalError = useAppStore((state) => state.terminalError);
   const setToken = useAppStore((state) => state.setToken);
-  const setWorkspace = useAppStore((state) => state.setWorkspace);
   const setDirectory = useAppStore((state) => state.setDirectory);
   const addTab = useAppStore((state) => state.addTab);
   const updateTab = useAppStore((state) => state.updateTab);
@@ -65,36 +75,121 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [searchResults, setSearchResults] = useState<FileEntry[]>([]);
+  const [addingProject, setAddingProject] = useState(false);
 
-  const loadWorkspaceData = async (nextWorkspace: Workspace, nextToken: string) => {
-    setWorkspace(nextWorkspace);
-    localStorage.setItem("ainide:last-workspace", nextWorkspace.rootPath);
+  const applyLists = (result: Pick<ProjectMutationResponse, "activeProjectId" | "openProjects" | "knownProjects">, restoreError?: string) => {
+    useAppStore.getState().setProjectSession({
+      activeProjectId: result.activeProjectId ?? undefined,
+      openProjects: result.openProjects,
+      knownProjects: result.knownProjects,
+      restoreError,
+    });
+  };
+
+  const loadExplorerAndGit = async (nextToken: string) => {
     const [entries, status] = await Promise.allSettled([listFiles("", nextToken), getGitStatus(nextToken)]);
     if (entries.status === "fulfilled") setDirectory("", { entries: entries.value, loading: false });
     else setDirectory("", { entries: [], loading: false, error: entries.reason instanceof Error ? entries.reason.message : "Unable to read workspace" });
     if (status.status === "fulfilled") setGit(status.value);
     else setNotice(status.reason instanceof Error ? status.reason.message : "Git status unavailable", "error");
-    await reconcileTerminals(nextToken);
   };
 
   const reconcileTerminals = async (nextToken: string) => {
     let existing: TerminalSession[] = [];
     try { existing = await getTerminals(nextToken); } catch { /* An empty terminal list is valid before the backend is ready. */ }
-    const kinds: TerminalSession["kind"][] = ["agent", "shell", "lazygit"];
-    for (const kind of kinds) {
-      if (!existing.some((terminal) => terminal.kind === kind)) {
-        try {
-          const created = await createTerminal(kind, nextToken);
-          existing.push(created);
-          if (kind === "lazygit") setTerminalError(undefined);
-        } catch (error) {
-          if (kind === "lazygit") setTerminalError("Lazygit is unavailable. Install it or use the Shell terminal.");
-          else setNotice(`${kind} terminal could not be started`, "error");
-        }
+    for (const kind of missingTerminalKinds(existing)) {
+      try {
+        const created = await createTerminal(kind, nextToken);
+        existing.push(created);
+        if (kind === "lazygit") setTerminalError(undefined);
+      } catch (error) {
+        if (kind === "lazygit") setTerminalError("Lazygit is unavailable. Install it or use the Shell terminal.");
+        else setNotice(`${kind} terminal could not be started`, "error");
       }
     }
     if (existing.some((terminal) => terminal.kind === "lazygit" && !terminal.alive)) setTerminalError("Lazygit exited: install Lazygit to use the review terminal.");
     setTerminals(existing);
+  };
+
+  const reopenFromSnapshot = async (snapshot: ProjectSessionSnapshot | undefined, nextToken: string) => {
+    if (!snapshot) return;
+    useAppStore.setState({
+      panes: {
+        primary: { tabPaths: [...snapshot.panes.primary.tabPaths], activePath: snapshot.panes.primary.activePath },
+        secondary: { tabPaths: [...snapshot.panes.secondary.tabPaths], activePath: snapshot.panes.secondary.activePath },
+      },
+      secondaryOpen: snapshot.secondaryOpen,
+      mode: snapshot.mode,
+      expanded: Object.fromEntries(snapshot.expandedPaths.map((path) => [path, true])),
+    });
+    const nextTabs: EditorTab[] = [];
+    for (const filePath of snapshot.openFilePaths) {
+      const tab: EditorTab = { path: filePath, name: fileName(filePath), content: "", savedContent: "", language: language(filePath) };
+      try {
+        const result = await readFile(filePath, nextToken);
+        nextTabs.push({ ...tab, content: result.content, savedContent: result.content, binary: result.binary });
+      } catch (error) {
+        nextTabs.push({ ...tab, error: error instanceof Error ? error.message : "Unable to open file" });
+        setNotice(`Could not open ${fileName(filePath)}`, "error");
+      }
+    }
+    useAppStore.setState({ tabs: nextTabs });
+  };
+
+  const reloadTabsFromDisk = async (nextToken: string) => {
+    const currentTabs = useAppStore.getState().tabs;
+    const disk: Record<string, { content?: string; binary?: boolean; error?: string }> = {};
+    await Promise.all(currentTabs.map(async (tab) => {
+      try {
+        const result = await readFile(tab.path, nextToken);
+        disk[tab.path] = result.binary ? { binary: true } : { content: result.content };
+      } catch (error) {
+        disk[tab.path] = { error: error instanceof Error ? error.message : "Unable to open file" };
+      }
+    }));
+    useAppStore.getState().applyDiskTabs(applyDiskToTabs(currentTabs, disk));
+  };
+
+  const showProject = async (nextWorkspace: Workspace, projectId: string, nextToken: string, snapshot?: ProjectSessionSnapshot, reuseBag = false) => {
+    const store = useAppStore.getState();
+    const hasBag = reuseBag && Boolean(store.projectBags[projectId]);
+    store.restoreProjectBag(projectId, nextWorkspace, hasBag ? undefined : emptyProjectBag());
+    localStorage.setItem("ainide:last-workspace", nextWorkspace.rootPath);
+    await loadExplorerAndGit(nextToken);
+    if (hasBag) await reloadTabsFromDisk(nextToken);
+    else await reopenFromSnapshot(snapshot, nextToken);
+    await reconcileTerminals(nextToken);
+  };
+
+  const acceptMutation = async (result: ProjectMutationResponse, nextToken: string, reuseBag: boolean) => {
+    applyLists(result);
+    if (!result.workspace || !result.activeProjectId) {
+      useAppStore.getState().clearActiveProject();
+      return;
+    }
+    await showProject(result.workspace, result.activeProjectId, nextToken, result.snapshot, reuseBag);
+  };
+
+  const openFromPath = async (path: string, nextToken: string) => {
+    useAppStore.getState().stashActiveBag();
+    const result = await openProject(path, nextToken, leavingSnapshot());
+    await acceptMutation(result, nextToken, true);
+  };
+
+  const switchToOpenProject = async (projectId: string) => {
+    if (!token) return;
+    useAppStore.getState().stashActiveBag();
+    const result = await switchProject(projectId, token, leavingSnapshot());
+    await acceptMutation(result, token, true);
+  };
+
+  const closeActiveProject = async () => {
+    if (!token || !activeProjectId) return;
+    const closedId = activeProjectId;
+    useAppStore.getState().stashActiveBag();
+    const result = await closeProject(closedId, token, leavingSnapshot());
+    useAppStore.getState().removeProjectBag(closedId);
+    await acceptMutation(result, token, true);
   };
 
   useEffect(() => {
@@ -103,8 +198,11 @@ export default function App() {
         const session = await getSession();
         const nextToken = session.token ?? session.sessionToken ?? "";
         setToken(nextToken);
-        const existing = session.workspace ?? (nextToken ? await getWorkspace(nextToken).catch(() => undefined) : undefined);
-        if (existing) await loadWorkspaceData(existing, nextToken);
+        applyLists(session, session.restoreError);
+        if (session.restoreError) setPickerError(session.restoreError);
+        if (session.workspace && session.activeProjectId) {
+          await showProject(session.workspace, session.activeProjectId, nextToken, session.snapshot, false);
+        }
       } catch (error) {
         setPickerError(error instanceof Error ? error.message : "Could not connect to the ainide server");
       } finally { setStarting(false); }
@@ -119,11 +217,14 @@ export default function App() {
     socket.onmessage = (event) => {
       const message = parseEvent(String(event.data));
       if (!message || !("type" in message)) return;
+      if (!("projectId" in message)) return;
+      const current = useAppStore.getState();
+      if (!eventBelongsToActiveProject(message, current.activeProjectId)) return;
       if (message.type === "git_changed") setGit(message.status);
       if (message.type === "file_changed") void handleExternalChange(message.path, message.change);
       if (message.type === "workspace_changed") {
-        const currentWorkspace = useAppStore.getState().workspace;
-        if (currentWorkspace) void loadWorkspaceData(currentWorkspace, token);
+        const active = useAppStore.getState();
+        if (active.workspace && active.token) void loadExplorerAndGit(active.token);
       }
     };
     socket.onerror = () => setNotice("Live workspace events disconnected", "error");
@@ -131,6 +232,16 @@ export default function App() {
     // Events are reconnected when the session token changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (!token || !workspace || !activeProjectId) return;
+    const timer = window.setTimeout(() => {
+      const state = useAppStore.getState();
+      if (!state.workspace || !state.activeProjectId) return;
+      void saveProjectSnapshot(token, { projectId: state.activeProjectId, ...snapshotFromBag(state.workspace, captureProjectBag(state)) }).catch(() => undefined);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [token, workspace, activeProjectId, tabs, panes, mode, terminals, directories]);
 
   const handleExternalChange = async (path: string, change: "changed" | "created" | "deleted") => {
     const current = useAppStore.getState();
@@ -213,6 +324,12 @@ export default function App() {
   const quickResults = (searchResults.length ? searchResults : loadedFiles).filter((entry) => !query || fuzzy(`${entry.name} ${entry.path}`, query)).slice(0, 40);
   const paletteActions: PaletteAction[] = [
     { label: "Open File", shortcut: "⌘ P", run: () => { setPaletteOpen(false); setQuickOpen(true); } },
+    { label: "Open another project", run: () => { setPaletteOpen(false); setAddingProject(true); } },
+    ...openProjects.filter((project) => project.projectId !== activeProjectId).map((project) => ({
+      label: `Switch to ${project.name}`,
+      run: () => { setPaletteOpen(false); void switchToOpenProject(project.projectId).catch((error) => setNotice(error instanceof Error ? error.message : "Could not switch project", "error")); },
+    })),
+    { label: "Close project", run: () => { setPaletteOpen(false); void closeActiveProject().catch((error) => setNotice(error instanceof Error ? error.message : "Could not close project", "error")); } },
     { label: "New Terminal", run: () => { setPaletteOpen(false); void newTerminal(); } },
     { label: "Open Agent", run: () => { setPaletteOpen(false); void newTerminal("agent"); } },
     { label: "Open Shell", run: () => { setPaletteOpen(false); void newTerminal("shell"); } },
@@ -247,17 +364,27 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [quickOpen, query, token]);
 
+  const pickerKnown = knownProjects;
+  const pickerInitial = knownProjectSeed(knownProjects, localStorage.getItem("ainide:last-workspace"));
+
   if (starting) return <main className="boot-screen"><div className="brand-mark">ai<span>ni</span>de</div><span className="loading-line">Connecting to local runtime...</span></main>;
-  if (!workspace) return <WorkspacePicker initialPath={localStorage.getItem("ainide:last-workspace") ?? ""} busy={pickerBusy} error={pickerError} onOpen={(path) => {
+  if (!workspace) return <WorkspacePicker initialPath={pickerInitial} knownProjects={pickerKnown} busy={pickerBusy} error={pickerError} onOpen={(path) => {
     setPickerBusy(true); setPickerError(undefined);
-    void openWorkspace(path, token).then((next) => loadWorkspaceData(next, token)).catch((error) => setPickerError(error instanceof Error ? error.message : "Could not open workspace")).finally(() => setPickerBusy(false));
+    void openFromPath(path, token).catch((error) => setPickerError(error instanceof Error ? error.message : "Could not open workspace")).finally(() => setPickerBusy(false));
   }} />;
 
   const changedRecently = Object.values(recentChanges).filter((time) => Date.now() - time < 10 * 60 * 1000).length;
   return <div className={`app-shell ${mobileSidebar ? "mobile-sidebar-open" : ""}`}>
     <header className="topbar">
       <button className="mobile-menu" onClick={() => setMobileSidebar(!mobileSidebar)}>☰</button>
-      <div className="top-brand">ainide <span>/</span> <b>{workspace.name || fileName(workspace.rootPath)}</b></div>
+      <ProjectSwitcher
+        activeName={workspace.name || fileName(workspace.rootPath)}
+        openProjects={openProjects}
+        activeProjectId={activeProjectId}
+        onSwitch={(projectId) => void switchToOpenProject(projectId).catch((error) => setNotice(error instanceof Error ? error.message : "Could not switch project", "error"))}
+        onOpenAnother={() => setAddingProject(true)}
+        onClose={() => void closeActiveProject().catch((error) => setNotice(error instanceof Error ? error.message : "Could not close project", "error"))}
+      />
       <div className="mode-switch" role="tablist"><button className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")}>Edit <kbd>⌘1</kbd></button><button className={mode === "review" ? "active" : ""} onClick={() => void switchToReview()}>Review <kbd>⌘2</kbd></button></div>
        <div className="top-actions"><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
@@ -275,6 +402,12 @@ export default function App() {
     </div>
     <div className="notices">{notices.map((notice) => <button className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)}>{notice.text}<span>×</span></button>)}</div>
     {terminalError && <div className="terminal-error-toast"><b>Terminal note</b> {terminalError}</div>}
+    {addingProject && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddingProject(false); }}>
+      <WorkspacePicker initialPath="" knownProjects={knownProjects.filter((project) => project.projectId !== activeProjectId)} busy={pickerBusy} error={pickerError} onOpen={(path) => {
+        setPickerBusy(true); setPickerError(undefined);
+        void openFromPath(path, token).then(() => setAddingProject(false)).catch((error) => setPickerError(error instanceof Error ? error.message : "Could not open workspace")).finally(() => setPickerBusy(false));
+      }} />
+    </div>}
     {(paletteOpen || quickOpen) && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) { setPaletteOpen(false); setQuickOpen(false); } }}>
       <div className="command-modal">
         <div className="command-input"><span>{quickOpen ? "⌕" : "⌘"}</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={quickOpen ? "Search files..." : "Type a command..."} onKeyDown={(event) => { if (event.key === "Escape") { setQuickOpen(false); setPaletteOpen(false); } }} /></div>

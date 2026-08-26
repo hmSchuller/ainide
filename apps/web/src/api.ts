@@ -1,6 +1,8 @@
 import type {
   FileEntry,
   GitStatus,
+  ProjectRef,
+  ProjectSessionSnapshot,
   RecentChange,
   ReviewScope,
   TerminalSession,
@@ -69,6 +71,42 @@ export async function openWorkspace(path: string, token: string): Promise<Worksp
       body: JSON.stringify({ path }),
     }),
   );
+}
+
+export interface ProjectMutationResponse {
+  workspace: Workspace | null;
+  activeProjectId: string | null;
+  openProjects: ProjectRef[];
+  knownProjects: ProjectRef[];
+  snapshot?: ProjectSessionSnapshot;
+}
+
+export async function openProject(path: string, token: string, snapshot?: ProjectSessionSnapshot): Promise<ProjectMutationResponse> {
+  return request<ProjectMutationResponse>("/api/projects/open", token, {
+    method: "POST",
+    body: JSON.stringify({ path, ...(snapshot ? { snapshot } : {}) }),
+  });
+}
+
+export async function switchProject(projectId: string, token: string, snapshot?: ProjectSessionSnapshot): Promise<ProjectMutationResponse> {
+  return request<ProjectMutationResponse>("/api/projects/switch", token, {
+    method: "POST",
+    body: JSON.stringify({ projectId, ...(snapshot ? { snapshot } : {}) }),
+  });
+}
+
+export async function closeProject(projectId: string, token: string, snapshot?: ProjectSessionSnapshot): Promise<ProjectMutationResponse> {
+  return request<ProjectMutationResponse>("/api/projects", token, {
+    method: "DELETE",
+    body: JSON.stringify({ projectId, ...(snapshot ? { snapshot } : {}) }),
+  });
+}
+
+export async function saveProjectSnapshot(token: string, snapshot: Partial<ProjectSessionSnapshot> & { projectId?: string }): Promise<void> {
+  await request("/api/projects/snapshot", token, {
+    method: "PUT",
+    body: JSON.stringify(snapshot),
+  });
 }
 
 export async function listFiles(path: string, token: string): Promise<FileEntry[]> {

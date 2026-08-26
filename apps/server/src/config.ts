@@ -8,9 +8,17 @@ export interface AinideConfig {
   reviewTool?: "difit";
 }
 
+export function configFilePath(): string {
+  return process.env.AINIDE_CONFIG ?? path.join(os.homedir(), ".config", "ainide", "config.json");
+}
+
+export function sessionsFilePath(): string {
+  return process.env.AINIDE_SESSIONS ?? path.join(path.dirname(configFilePath()), "sessions.json");
+}
+
 /** Local-only settings are intentionally read once when the server starts. */
 export async function loadConfig(): Promise<AinideConfig> {
-  const configPath = process.env.AINIDE_CONFIG ?? path.join(os.homedir(), ".config", "ainide", "config.json");
+  const configPath = configFilePath();
   let fileConfig: AinideConfig = {};
   try {
     const value: unknown = JSON.parse(await fs.readFile(configPath, "utf8"));

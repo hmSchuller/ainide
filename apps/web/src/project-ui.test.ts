@@ -1,0 +1,48 @@
+import { describe, expect, it } from "vitest";
+import type { EditorTab } from "./types";
+import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, knownProjectSeed } from "./project-ui";
+
+function tab(overrides: Partial<EditorTab> = {}): EditorTab {
+  return { path: "src/a.ts", name: "a.ts", content: "clean", savedContent: "clean", language: "typescript", ...overrides };
+}
+
+describe("project UI bags", () => {
+  it("keeps dirty buffer contents across switch-and-back", () => {
+    const dirty = emptyProjectBag();
+    dirty.tabs = [tab({ content: "UNSAVED", savedContent: "clean" })];
+    const bags: Record<string, ReturnType<typeof captureProjectBag>> = {};
+    bags["/proj-a"] = captureProjectBag(dirty);
+    const other = emptyProjectBag();
+    other.tabs = [tab({ path: "b.ts", name: "b.ts", content: "other", savedContent: "other" })];
+    bags["/proj-b"] = captureProjectBag(other);
+    const restored = bags["/proj-a"];
+    expect(restored.tabs[0]?.content).toBe("UNSAVED");
+    expect(restored.tabs[0]?.savedContent).toBe("clean");
+  });
+
+  it("ignores events for a non-active projectId", () => {
+    const event = { type: "file_changed" as const, projectId: "/hidden", path: "src/a.ts", change: "changed" as const };
+    expect(eventBelongsToActiveProject(event, "/active")).toBe(false);
+    expect(eventBelongsToActiveProject({ ...event, projectId: "/active" }, "/active")).toBe(true);
+  });
+
+  it("reloads clean tabs from disk and flags dirty conflicts after activate", () => {
+    const tabs = [
+      tab({ path: "clean.ts", name: "clean.ts", content: "old", savedContent: "old" }),
+      tab({ path: "dirty.ts", name: "dirty.ts", content: "UNSAVED", savedContent: "old" }),
+    ];
+    const next = applyDiskToTabs(tabs, {
+      "clean.ts": { content: "hidden-agent-change" },
+      "dirty.ts": { content: "disk" },
+    });
+    expect(next[0]?.content).toBe("hidden-agent-change");
+    expect(next[0]?.savedContent).toBe("hidden-agent-change");
+    expect(next[1]?.content).toBe("UNSAVED");
+    expect(next[1]?.conflict?.externalContent).toBe("disk");
+  });
+
+  it("seeds the picker from last-workspace only when no known projects exist", () => {
+    expect(knownProjectSeed([], "/old/path")).toBe("/old/path");
+    expect(knownProjectSeed([{ projectId: "/known", rootPath: "/known", name: "known" }], "/old/path")).toBe("/known");
+  });
+});

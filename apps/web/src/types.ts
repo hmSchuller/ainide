@@ -1,4 +1,4 @@
-import type { FileEntry, GitStatus, ReviewScope, TerminalSession, Workspace } from "@ainide/shared";
+import type { FileEntry, GitStatus, ReviewScope, SessionBootstrap, TerminalSession } from "@ainide/shared";
 
 export type AppMode = "edit" | "review";
 export type EditorPaneId = "primary" | "secondary";
@@ -19,10 +19,8 @@ export interface EditorTab {
   conflict?: { externalContent?: string };
 }
 
-export interface SessionResponse {
-  token?: string;
+export interface SessionResponse extends SessionBootstrap {
   sessionToken?: string;
-  workspace?: Workspace | null;
 }
 
 export interface DirectoryState {

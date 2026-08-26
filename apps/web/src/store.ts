@@ -1,10 +1,16 @@
 import { create } from "zustand";
-import type { FileEntry, GitStatus, TerminalSession, Workspace } from "@ainide/shared";
+import type { FileEntry, GitStatus, ProjectRef, TerminalSession, Workspace } from "@ainide/shared";
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, Notice, ReviewState } from "./types";
+import { captureProjectBag, emptyPanes, emptyProjectBag, type ProjectUiBag } from "./project-ui";
 
 interface AppState {
   token: string;
   workspace?: Workspace;
+  activeProjectId?: string;
+  openProjects: ProjectRef[];
+  knownProjects: ProjectRef[];
+  projectBags: Record<string, ProjectUiBag>;
+  restoreError?: string;
   mode: AppMode;
   directories: Record<string, DirectoryState>;
   expanded: Record<string, boolean>;
@@ -53,16 +59,18 @@ interface AppState {
   setTerminalMaximized: (maximized: boolean) => void;
   setTerminalError: (error?: string) => void;
   setPendingLocation: (location?: AppState["pendingLocation"]) => void;
+  setProjectSession: (input: { activeProjectId?: string; openProjects: ProjectRef[]; knownProjects: ProjectRef[]; restoreError?: string }) => void;
+  stashActiveBag: () => void;
+  restoreProjectBag: (projectId: string, workspace: Workspace, fallback?: ProjectUiBag) => void;
+  applyDiskTabs: (tabs: EditorTab[]) => void;
+  clearActiveProject: () => void;
+  removeProjectBag: (projectId: string) => void;
 }
 
 const savedNumber = (key: string, fallback: number): number => {
   const value = Number(localStorage.getItem(key));
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
-
-function emptyPanes(): Record<EditorPaneId, EditorPaneState> {
-  return { primary: { tabPaths: [] }, secondary: { tabPaths: [] } };
-}
 
 export function findPaneForPath(panes: Record<EditorPaneId, EditorPaneState>, path: string): EditorPaneId | undefined {
   return (Object.keys(panes) as EditorPaneId[]).find((paneId) => panes[paneId].tabPaths.includes(path));
@@ -74,6 +82,9 @@ function paneWith(panes: Record<EditorPaneId, EditorPaneState>, paneId: EditorPa
 
 export const useAppStore = create<AppState>((set) => ({
   token: "",
+  openProjects: [],
+  knownProjects: [],
+  projectBags: {},
   mode: "edit",
   directories: {},
   expanded: {},
@@ -157,6 +168,47 @@ export const useAppStore = create<AppState>((set) => ({
   setTerminalMaximized: (terminalMaximized) => set({ terminalMaximized, terminalCollapsed: false }),
   setTerminalError: (terminalError) => set({ terminalError }),
   setPendingLocation: (pendingLocation) => set({ pendingLocation }),
+  setProjectSession: (input) => set({
+    activeProjectId: input.activeProjectId,
+    openProjects: input.openProjects,
+    knownProjects: input.knownProjects,
+    restoreError: input.restoreError,
+  }),
+  stashActiveBag: () => set((current) => {
+    if (!current.activeProjectId) return current;
+    return { projectBags: { ...current.projectBags, [current.activeProjectId]: captureProjectBag(current) } };
+  }),
+  restoreProjectBag: (projectId, workspace, fallback) => set((current) => {
+    const bag = current.projectBags[projectId] ?? fallback ?? emptyProjectBag();
+    return {
+      workspace,
+      activeProjectId: projectId,
+      mode: bag.mode,
+      directories: bag.directories,
+      expanded: bag.expanded,
+      selectedPath: bag.selectedPath,
+      tabs: bag.tabs,
+      panes: bag.panes,
+      secondaryOpen: bag.secondaryOpen,
+      focusedPaneId: bag.focusedPaneId,
+      git: bag.git,
+      terminals: bag.terminals,
+      activeTerminalId: bag.activeTerminalId,
+      recentChanges: bag.recentChanges,
+      review: { ...bag.review, url: undefined, message: undefined, loading: false },
+    };
+  }),
+  applyDiskTabs: (tabs) => set({ tabs }),
+  clearActiveProject: () => set({
+    workspace: undefined,
+    activeProjectId: undefined,
+    ...emptyProjectBag(),
+  }),
+  removeProjectBag: (projectId) => set((current) => {
+    const projectBags = { ...current.projectBags };
+    delete projectBags[projectId];
+    return { projectBags };
+  }),
 }));
 
 export function persistLayout(explorerWidth?: number, terminalHeight?: number): void {
