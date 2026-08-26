@@ -116,6 +116,7 @@ export interface ReviewStatus {
   available: boolean;
   url?: string;
   pid?: number;
+  scope?: ReviewScope;
   message?: string;
 }
 

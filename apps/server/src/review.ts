@@ -87,7 +87,9 @@ export class ReviewManager {
   ) {}
 
   getStatus(): ReviewStatus {
-    return { ...this.status };
+    const status = { ...this.status };
+    if (this.scope && status.running) status.scope = this.scope;
+    return status;
   }
 
   async start(scope: unknown, restart = false): Promise<ReviewStatus> {

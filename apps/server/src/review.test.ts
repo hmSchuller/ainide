@@ -156,4 +156,51 @@ describe("ReviewManager", () => {
     expect(manager.getStatus().url).toBeUndefined();
     expect(manager.getStatus().running).toBe(false);
   });
+
+  it("includes scope on running status", async () => {
+    const manager = new ReviewManager(() => process.cwd(), {
+      waitForHttpReady: async () => ({ ok: true }),
+      spawn: vi.fn(() => ({
+        pid: 4242,
+        once: vi.fn(),
+        kill: vi.fn(),
+        stdout: null,
+        stderr: null,
+      })) as unknown as typeof import("node:child_process").spawn,
+    });
+
+    await manager.start("staged", true);
+    const status = manager.getStatus();
+    expect(status.running).toBe(true);
+    expect(status.scope).toBe("staged");
+    expect(status.url).toBeDefined();
+    await manager.stop();
+    expect(manager.getStatus().scope).toBeUndefined();
+  });
+
+  it("returns existing status when already running for the same scope", async () => {
+    const spawnMock = vi.fn(() => ({
+      pid: 4242,
+      once: vi.fn(),
+      kill: vi.fn(),
+      stdout: null,
+      stderr: null,
+    })) as unknown as typeof import("node:child_process").spawn;
+    const manager = new ReviewManager(() => process.cwd(), {
+      waitForHttpReady: async () => ({ ok: true }),
+      spawn: spawnMock,
+    });
+
+    const first = await manager.start("staged", true);
+    expect(first.url).toBeDefined();
+    expect(first.scope).toBe("staged");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    const second = await manager.start("staged", false);
+    expect(second.url).toBe(first.url);
+    expect(second.scope).toBe("staged");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    await manager.stop();
+  });
 });

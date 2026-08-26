@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FileEntry, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
-import { closeProject, createTerminal, getGitStatus, getSession, getTerminals, listFiles, openProject, parseEvent, readFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
+import { closeProject, createTerminal, getGitStatus, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseEvent, readFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
 import { EditorSurface, language } from "./components/Editor";
 import { Explorer } from "./components/Explorer";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
@@ -308,10 +308,50 @@ export default function App() {
   };
 
   const switchToReview = async (restart = false) => {
+    if (!token) {
+      setMode("review");
+      return;
+    }
+
+    const cached = useAppStore.getState().review;
+    const hasCachedSession = !restart && Boolean(cached.url) && cached.scope === reviewScope;
+
     setMode("review");
-    setReview({ loading: true, url: undefined, message: undefined });
-    try { setReview({ ...(await startReview(token, reviewScope, restart)), loading: false }); }
-    catch (error) { setReview({ loading: false, available: false, message: error instanceof Error ? error.message : "Review could not start" }); }
+
+    if (hasCachedSession) {
+      setReview({ loading: false });
+      try {
+        const status = await getReviewStatus(token);
+        if (status.running && status.url && status.scope === reviewScope) {
+          if (status.url !== cached.url || status.message) setReview({ ...status, loading: false });
+          return;
+        }
+        const scopeMismatch = status.running && status.scope !== reviewScope;
+        setReview({ loading: true, url: undefined, message: undefined });
+        setReview({ ...(await startReview(token, reviewScope, scopeMismatch)), loading: false });
+      } catch (error) {
+        setReview({ loading: false, available: false, message: error instanceof Error ? error.message : "Review could not start" });
+      }
+      return;
+    }
+
+    try {
+      if (!restart) {
+        const status = await getReviewStatus(token);
+        if (status.running && status.url && status.scope === reviewScope) {
+          setReview({ ...status, loading: false });
+          return;
+        }
+        const scopeMismatch = status.running && status.scope !== reviewScope;
+        setReview({ loading: true, url: undefined, message: undefined });
+        setReview({ ...(await startReview(token, reviewScope, scopeMismatch)), loading: false });
+        return;
+      }
+      setReview({ loading: true, url: undefined, message: undefined });
+      setReview({ ...(await startReview(token, reviewScope, true)), loading: false });
+    } catch (error) {
+      setReview({ loading: false, available: false, message: error instanceof Error ? error.message : "Review could not start" });
+    }
   };
 
   const newTerminal = async (kind: TerminalSession["kind"] = "custom") => {
@@ -396,7 +436,12 @@ export default function App() {
         window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); event.preventDefault();
       }} />
        <main className="main-column">
-          {mode === "edit" ? <EditorSurface onSave={(tab) => void saveFile(tab)} /> : <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />}
+          <div className="mode-surface" hidden={mode !== "edit"}>
+            <EditorSurface onSave={(tab) => void saveFile(tab)} />
+          </div>
+          <div className="mode-surface" hidden={mode !== "review"}>
+            <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />
+          </div>
         <TerminalPanel onNewTerminal={(kind) => void newTerminal(kind)} onOpenReference={openReference} />
       </main>
     </div>

@@ -5,6 +5,7 @@ import type {
   ProjectSessionSnapshot,
   RecentChange,
   ReviewScope,
+  ReviewStatus,
   TerminalSession,
   Workspace,
   WorkspaceEvent,
@@ -181,8 +182,12 @@ export async function renameTerminal(id: string, title: string, token: string): 
   });
 }
 
-export async function startReview(token: string, scope: ReviewScope = "working-tree", restart = false): Promise<{ url?: string; available?: boolean; message?: string }> {
-  return request("/api/review/start", token, { method: "POST", body: JSON.stringify({ scope, restart }) });
+export async function getReviewStatus(token: string): Promise<ReviewStatus> {
+  return request<ReviewStatus>("/api/review/status", token);
+}
+
+export async function startReview(token: string, scope: ReviewScope = "working-tree", restart = false): Promise<ReviewStatus> {
+  return request<ReviewStatus>("/api/review/start", token, { method: "POST", body: JSON.stringify({ scope, restart }) });
 }
 
 export async function searchFiles(query: string, token: string): Promise<FileEntry[]> {
