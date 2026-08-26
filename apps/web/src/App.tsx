@@ -6,8 +6,8 @@ import { Explorer } from "./components/Explorer";
 import { ReviewSurface } from "./components/ReviewSurface";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { WorkspacePicker } from "./components/WorkspacePicker";
-import { isDirty, useAppStore } from "./store";
-import type { EditorTab } from "./types";
+import { findPaneForPath, isDirty, useAppStore } from "./store";
+import type { EditorPaneId, EditorTab } from "./types";
 
 type PaletteAction = { label: string; shortcut?: string; run: () => void };
 
@@ -35,7 +35,8 @@ export default function App() {
   const directories = useAppStore((state) => state.directories);
   const terminals = useAppStore((state) => state.terminals);
   const tabs = useAppStore((state) => state.tabs);
-  const activePath = useAppStore((state) => state.activePath);
+  const panes = useAppStore((state) => state.panes);
+  const focusedPaneId = useAppStore((state) => state.focusedPaneId);
   const explorerWidth = useAppStore((state) => state.explorerWidth);
   const notices = useAppStore((state) => state.notices);
   const recentChanges = useAppStore((state) => state.recentChanges);
@@ -153,13 +154,18 @@ export default function App() {
     try { setDirectory(path, { entries: await listFiles(path, nextToken), loading: false }); } catch { /* The explorer keeps its previous entries when an event races deletion. */ }
   };
 
-  const openFile = async (entry: FileEntry) => {
-    if (!token) return;
+  const openFile = async (entry: FileEntry, requestedPane: EditorPaneId = "primary"): Promise<EditorPaneId | undefined> => {
+    if (!token) return undefined;
     setSelected(entry.path);
-    setActivePath(entry.path);
-    if (tabs.some((tab) => tab.path === entry.path)) return;
+    const current = useAppStore.getState();
+    const owner = findPaneForPath(current.panes, entry.path);
+    const paneId = owner ?? requestedPane;
+    if (owner) {
+      setActivePath(owner, entry.path);
+      return owner;
+    }
     const tab: EditorTab = { path: entry.path, name: entry.name || fileName(entry.path), content: "", savedContent: "", language: language(entry.path) };
-    addTab(tab);
+    addTab(paneId, tab);
     try {
       const result = await readFile(entry.path, token);
       updateTab(entry.path, { content: result.content, savedContent: result.content, binary: result.binary });
@@ -167,6 +173,7 @@ export default function App() {
       updateTab(entry.path, { error: error instanceof Error ? error.message : "Unable to open file" });
       setNotice(`Could not open ${fileName(entry.path)}`, "error");
     }
+    return paneId;
   };
 
   const saveFile = async (tab: EditorTab) => {
@@ -178,7 +185,9 @@ export default function App() {
   const openReference = (path: string, line: number, column?: number) => {
     const relativePath = workspace ? workspaceRelativePath(path, workspace.rootPath) : path;
     path = relativePath;
-    void openFile({ name: fileName(path), path, type: "file" }).then(() => setPendingLocation({ path, line, column }));
+    const current = useAppStore.getState();
+    const paneId = findPaneForPath(current.panes, path) ?? current.focusedPaneId;
+    void openFile({ name: fileName(path), path, type: "file" }, paneId).then((openedPane) => setPendingLocation({ path, line, column, paneId: openedPane ?? paneId }));
   };
 
   const refresh = async () => {
@@ -210,7 +219,7 @@ export default function App() {
     { label: "Open Lazygit", run: () => { setPaletteOpen(false); void newTerminal("lazygit"); } },
     { label: "Switch to Edit mode", shortcut: "⌘ 1", run: () => { setMode("edit"); setPaletteOpen(false); } },
     { label: "Switch to Review mode", shortcut: "⌘ 2", run: () => { setPaletteOpen(false); void switchToReview(); } },
-    { label: "Save", shortcut: "⌘ S", run: () => { const tab = tabs.find((item) => item.path === activePath); if (tab) void saveFile(tab); setPaletteOpen(false); } },
+     { label: "Save", shortcut: "⌘ S", run: () => { const activePath = panes[focusedPaneId].activePath; const tab = tabs.find((item) => item.path === activePath); if (tab) void saveFile(tab); setPaletteOpen(false); } },
     { label: "Refresh Git and files", run: () => { setPaletteOpen(false); void refresh(); } },
      { label: "Restart Review", run: () => { setPaletteOpen(false); void switchToReview(true); } },
   ].filter((action) => !query || fuzzy(action.label, query));
@@ -221,7 +230,7 @@ export default function App() {
       if (!command) return;
       if (event.shiftKey && event.key.toLowerCase() === "p") { event.preventDefault(); setPaletteOpen(true); setQuickOpen(false); setQuery(""); }
       else if (!event.shiftKey && event.key.toLowerCase() === "p") { event.preventDefault(); setQuickOpen(true); setPaletteOpen(false); setQuery(""); }
-      else if (event.key.toLowerCase() === "s") { event.preventDefault(); const tab = tabs.find((item) => item.path === activePath); if (tab) void saveFile(tab); }
+       else if (event.key.toLowerCase() === "s") { event.preventDefault(); const activePath = panes[focusedPaneId].activePath; const tab = tabs.find((item) => item.path === activePath); if (tab) void saveFile(tab); }
       else if (event.key.toLowerCase() === "j") { event.preventDefault(); useAppStore.setState((state) => ({ terminalCollapsed: !state.terminalCollapsed, terminalMaximized: false })); }
       else if (event.key === "1") setMode("edit");
       else if (event.key === "2") void switchToReview();
@@ -230,7 +239,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", keydown);
     // Keyboard commands intentionally use current actions from this render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabs, activePath, token]);
+   }, [tabs, panes, focusedPaneId, token]);
 
   useEffect(() => {
     if (!quickOpen || !query || !token) { setSearchResults([]); return; }
@@ -253,14 +262,14 @@ export default function App() {
        <div className="top-actions"><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
     <div className="workbench">
-      <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer onOpenFile={(entry) => void openFile(entry)} onRefresh={() => void refresh()} /></div>
+       <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer onOpenFile={(entry, secondary) => void openFile(entry, secondary ? "secondary" : "primary")} onRefresh={() => void refresh()} /></div>
       <div className="explorer-splitter" onPointerDown={(event) => {
         const move = (e: PointerEvent) => { const width = Math.max(190, Math.min(420, e.clientX)); useAppStore.setState({ explorerWidth: width }); localStorage.setItem("ainide:explorer-width", String(width)); };
         const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
         window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); event.preventDefault();
       }} />
-      <main className="main-column">
-         {mode === "edit" ? <EditorSurface onSave={(tab) => void saveFile(tab)} onOpenFile={(entry) => void openFile(entry)} /> : <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />}
+       <main className="main-column">
+          {mode === "edit" ? <EditorSurface onSave={(tab) => void saveFile(tab)} /> : <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />}
         <TerminalPanel onNewTerminal={(kind) => void newTerminal(kind)} onOpenReference={openReference} />
       </main>
     </div>

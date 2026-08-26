@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { FileEntry, GitStatus, TerminalSession, Workspace } from "@ainide/shared";
-import type { AppMode, DirectoryState, EditorTab, Notice, ReviewState } from "./types";
+import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, Notice, ReviewState } from "./types";
 
 interface AppState {
   token: string;
@@ -12,7 +12,9 @@ interface AppState {
   terminalHeight: number;
   selectedPath?: string;
   tabs: EditorTab[];
-  activePath?: string;
+  panes: Record<EditorPaneId, EditorPaneState>;
+  secondaryOpen: boolean;
+  focusedPaneId: EditorPaneId;
   git?: GitStatus;
   terminals: TerminalSession[];
   activeTerminalId?: string;
@@ -22,16 +24,20 @@ interface AppState {
   review: ReviewState;
   recentChanges: Record<string, number>;
   terminalError?: string;
-  pendingLocation?: { path: string; line: number; column?: number };
+  pendingLocation?: { path: string; line: number; column?: number; paneId: EditorPaneId };
   setToken: (token: string) => void;
   setWorkspace: (workspace?: Workspace) => void;
   setDirectory: (path: string, state: DirectoryState) => void;
   toggleDirectory: (path: string) => void;
   setSelected: (path?: string) => void;
-  addTab: (tab: EditorTab) => void;
+  addTab: (paneId: EditorPaneId, tab: EditorTab) => void;
   updateTab: (path: string, update: Partial<EditorTab>) => void;
-  closeTab: (path: string) => void;
-  setActivePath: (path?: string) => void;
+  closeTab: (paneId: EditorPaneId, path: string) => void;
+  setActivePath: (paneId: EditorPaneId, path?: string) => void;
+  setFocusedPane: (paneId: EditorPaneId) => void;
+  moveTab: (sourcePaneId: EditorPaneId, destinationPaneId: EditorPaneId, path: string, destinationIndex?: number) => void;
+  openSecondary: () => void;
+  closeSecondary: () => void;
   setGit: (git?: GitStatus) => void;
   setTerminals: (terminals: TerminalSession[]) => void;
   addTerminal: (terminal: TerminalSession) => void;
@@ -54,6 +60,18 @@ const savedNumber = (key: string, fallback: number): number => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
+function emptyPanes(): Record<EditorPaneId, EditorPaneState> {
+  return { primary: { tabPaths: [] }, secondary: { tabPaths: [] } };
+}
+
+export function findPaneForPath(panes: Record<EditorPaneId, EditorPaneState>, path: string): EditorPaneId | undefined {
+  return (Object.keys(panes) as EditorPaneId[]).find((paneId) => panes[paneId].tabPaths.includes(path));
+}
+
+function paneWith(panes: Record<EditorPaneId, EditorPaneState>, paneId: EditorPaneId, update: Partial<EditorPaneState>): Record<EditorPaneId, EditorPaneState> {
+  return { ...panes, [paneId]: { ...panes[paneId], ...update } };
+}
+
 export const useAppStore = create<AppState>((set) => ({
   token: "",
   mode: "edit",
@@ -62,6 +80,9 @@ export const useAppStore = create<AppState>((set) => ({
   explorerWidth: savedNumber("ainide:explorer-width", 248),
   terminalHeight: savedNumber("ainide:terminal-height", 260),
   tabs: [],
+  panes: emptyPanes(),
+  secondaryOpen: false,
+  focusedPaneId: "primary",
   terminals: [],
   terminalCollapsed: false,
   terminalMaximized: false,
@@ -73,15 +94,54 @@ export const useAppStore = create<AppState>((set) => ({
   setDirectory: (path, state) => set((current) => ({ directories: { ...current.directories, [path]: state } })),
   toggleDirectory: (path) => set((current) => ({ expanded: { ...current.expanded, [path]: !current.expanded[path] } })),
   setSelected: (selectedPath) => set({ selectedPath }),
-  addTab: (tab) => set((current) => ({ tabs: current.tabs.some((item) => item.path === tab.path) ? current.tabs : [...current.tabs, tab], activePath: tab.path })),
-  updateTab: (path, update) => set((current) => ({ tabs: current.tabs.map((tab) => (tab.path === path ? { ...tab, ...update } : tab)) })),
-  closeTab: (path) => set((current) => {
-    const index = current.tabs.findIndex((tab) => tab.path === path);
-    const tabs = current.tabs.filter((tab) => tab.path !== path);
-    const activePath = current.activePath === path ? tabs[Math.max(0, index - 1)]?.path : current.activePath;
-    return { tabs, activePath };
+  addTab: (paneId, tab) => set((current) => {
+    const owner = findPaneForPath(current.panes, tab.path);
+    if (owner) return { focusedPaneId: owner, panes: paneWith(current.panes, owner, { activePath: tab.path }) };
+    const nextTabs = current.tabs.some((item) => item.path === tab.path) ? current.tabs : [...current.tabs, tab];
+    const nextPanes = paneWith(current.panes, paneId, { tabPaths: [...current.panes[paneId].tabPaths, tab.path], activePath: tab.path });
+    return { tabs: nextTabs, panes: nextPanes, focusedPaneId: paneId, secondaryOpen: paneId === "secondary" ? true : current.secondaryOpen };
   }),
-  setActivePath: (activePath) => set({ activePath }),
+  updateTab: (path, update) => set((current) => ({ tabs: current.tabs.map((tab) => (tab.path === path ? { ...tab, ...update } : tab)) })),
+  closeTab: (paneId, path) => set((current) => {
+    const pane = current.panes[paneId];
+    const index = pane.tabPaths.indexOf(path);
+    if (index < 0) return current;
+    const tabPaths = pane.tabPaths.filter((item) => item !== path);
+    const activePath = pane.activePath === path ? tabPaths[Math.max(0, index - 1)] : pane.activePath;
+    const nextPanes = paneWith(current.panes, paneId, { tabPaths, activePath });
+    return { panes: nextPanes, tabs: findPaneForPath(nextPanes, path) ? current.tabs : current.tabs.filter((tab) => tab.path !== path) };
+  }),
+  setActivePath: (paneId, activePath) => set((current) => ({ panes: paneWith(current.panes, paneId, { activePath }), focusedPaneId: paneId })),
+  setFocusedPane: (focusedPaneId) => set({ focusedPaneId }),
+  moveTab: (sourcePaneId, destinationPaneId, path, destinationIndex) => set((current) => {
+    const source = current.panes[sourcePaneId];
+    const sourceIndex = source.tabPaths.indexOf(path);
+    if (sourceIndex < 0) return current;
+    if (sourcePaneId === destinationPaneId) {
+      const tabPaths = source.tabPaths.filter((item) => item !== path);
+      const requestedIndex = destinationIndex ?? tabPaths.length;
+      const index = Math.max(0, Math.min(sourceIndex < requestedIndex ? requestedIndex - 1 : requestedIndex, tabPaths.length));
+      tabPaths.splice(index, 0, path);
+      return { panes: paneWith(current.panes, sourcePaneId, { tabPaths }), focusedPaneId: sourcePaneId };
+    }
+    const destination = current.panes[destinationPaneId];
+    const sourcePaths = source.tabPaths.filter((item) => item !== path);
+    const destinationPaths = destination.tabPaths.filter((item) => item !== path);
+    const index = Math.max(0, Math.min(destinationIndex ?? destinationPaths.length, destinationPaths.length));
+    destinationPaths.splice(index, 0, path);
+    return {
+      panes: { ...current.panes, [sourcePaneId]: { ...source, tabPaths: sourcePaths, activePath: source.activePath === path ? sourcePaths[Math.max(0, sourceIndex - 1)] : source.activePath }, [destinationPaneId]: { ...destination, tabPaths: destinationPaths, activePath: path } },
+      focusedPaneId: destinationPaneId,
+      secondaryOpen: destinationPaneId === "secondary" ? true : current.secondaryOpen,
+    };
+  }),
+  openSecondary: () => set({ secondaryOpen: true }),
+  closeSecondary: () => set((current) => {
+    const primary = current.panes.primary;
+    const secondary = current.panes.secondary;
+    const tabPaths = [...primary.tabPaths, ...secondary.tabPaths.filter((path) => !primary.tabPaths.includes(path))];
+    return { panes: { primary: { tabPaths, activePath: primary.activePath ?? secondary.activePath }, secondary: { tabPaths: [], activePath: undefined } }, secondaryOpen: false, focusedPaneId: "primary" };
+  }),
   setGit: (git) => set({ git }),
   setTerminals: (terminals) => set((current) => ({ terminals, activeTerminalId: current.activeTerminalId && terminals.some((item) => item.id === current.activeTerminalId) ? current.activeTerminalId : terminals[0]?.id })),
   addTerminal: (terminal) => set((current) => ({ terminals: [...current.terminals, terminal], activeTerminalId: terminal.id })),

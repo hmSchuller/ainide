@@ -4,7 +4,7 @@ import { listFiles } from "../api";
 import { useAppStore } from "../store";
 
 interface ExplorerProps {
-  onOpenFile: (entry: FileEntry) => void;
+  onOpenFile: (entry: FileEntry, secondary: boolean) => void;
   onRefresh: () => void;
 }
 
@@ -70,13 +70,13 @@ export function Explorer({ onOpenFile, onRefresh }: ExplorerProps) {
               <button
                 className={`tree-row ${selectedPath === entry.path ? "selected" : ""}`}
                 style={{ paddingLeft: `${depth * 14 + 12}px` }}
-                onClick={() => {
-                  setSelected(entry.path);
-                  if (entry.type === "directory") {
-                    toggleDirectory(entry.path);
-                    if (!directories[entry.path]) void load(entry.path);
-                  } else onOpenFile(entry);
-                }}
+                 onClick={(event) => {
+                   setSelected(entry.path);
+                   if (entry.type === "directory") {
+                     toggleDirectory(entry.path);
+                     if (!directories[entry.path]) void load(entry.path);
+                   } else onOpenFile(entry, event.shiftKey);
+                 }}
                 title={entry.path}
               >
                 <span className="tree-chevron">{entry.type === "directory" ? (isOpen ? "⌄" : "›") : ""}</span>

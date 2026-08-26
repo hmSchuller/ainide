@@ -1,6 +1,12 @@
 import type { FileEntry, GitStatus, ReviewScope, TerminalSession, Workspace } from "@ainide/shared";
 
 export type AppMode = "edit" | "review";
+export type EditorPaneId = "primary" | "secondary";
+
+export interface EditorPaneState {
+  tabPaths: string[];
+  activePath?: string;
+}
 
 export interface EditorTab {
   path: string;
