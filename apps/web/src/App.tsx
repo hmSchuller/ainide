@@ -321,7 +321,12 @@ export default function App() {
 
   const refresh = async () => {
     if (!workspace || !token) return;
-    await Promise.all(Object.keys(directories).map(async (path) => { try { setDirectory(path, { entries: await listFiles(path, token), loading: false }); } catch { /* Keep the previous tree if one folder disappears. */ } }));
+    const state = useAppStore.getState();
+    const paths = [...new Set([
+      ...Object.keys(state.directories),
+      ...Object.entries(state.expanded).flatMap(([path, open]) => open ? [path] : []),
+    ])];
+    await Promise.all(paths.map(async (path) => { try { setDirectory(path, { entries: await listFiles(path, token), loading: false }); } catch { /* Keep the previous tree if one folder disappears. */ } }));
     try { setGit(await getGitStatus(token)); } catch (error) { setNotice(error instanceof Error ? error.message : "Git refresh failed", "error"); }
   };
 

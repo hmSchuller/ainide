@@ -34,19 +34,26 @@ export function Explorer({ onOpenFile, onRefresh }: ExplorerProps) {
   const git = useAppStore((state) => state.git);
 
   const load = async (path: string) => {
-    setDirectory(path, { entries: directories[path]?.entries ?? [], loading: true });
+    const state = useAppStore.getState();
+    if (!state.token) return;
+    const existing = state.directories[path];
+    setDirectory(path, { entries: existing?.entries ?? [], loading: true });
     try {
-      setDirectory(path, { entries: await listFiles(path, token), loading: false });
+      setDirectory(path, { entries: await listFiles(path, state.token), loading: false });
     } catch (error) {
       setDirectory(path, { entries: [], loading: false, error: error instanceof Error ? error.message : "Unable to list files" });
     }
   };
 
   useEffect(() => {
-    if (workspace && !directories[""]) void load("");
-    // Loading only follows workspace changes; refresh is an explicit action.
+    if (!workspace || !token) return;
+    const { directories: cached, expanded: open } = useAppStore.getState();
+    if (!cached[""]) void load("");
+    for (const [path, isOpen] of Object.entries(open)) {
+      if (isOpen && !cached[path]) void load(path);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace?.rootPath]);
+  }, [expanded, workspace?.rootPath, token]);
 
   const statusFor = (path: string): GitFileStatusKind | undefined => {
     const direct = git?.files.find((file) => file.path === path);
@@ -73,8 +80,9 @@ export function Explorer({ onOpenFile, onRefresh }: ExplorerProps) {
                  onClick={(event) => {
                    setSelected(entry.path);
                    if (entry.type === "directory") {
+                     const opening = !expanded[entry.path];
                      toggleDirectory(entry.path);
-                     if (!directories[entry.path]) void load(entry.path);
+                     if (opening && !directories[entry.path]) void load(entry.path);
                    } else onOpenFile(entry, event.shiftKey);
                  }}
                 title={entry.path}
