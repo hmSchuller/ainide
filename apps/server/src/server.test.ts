@@ -32,8 +32,8 @@ async function withServer(run: (server: AinideServer, sessionsPath: string) => P
   }
 }
 
-function auth(token: string) {
-  return { "x-session-token": token, "content-type": "application/json" };
+function auth(token: string, json = true) {
+  return json ? { "x-session-token": token, "content-type": "application/json" } : { "x-session-token": token };
 }
 
 describe("project HTTP API", () => {
@@ -219,6 +219,24 @@ describe("project HTTP API", () => {
       await server.app.inject({ method: "POST", url: "/api/projects/switch", headers, payload: { projectId: firstId } });
       const disk = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(sessionsPath, "utf8"))) as { activeRootPath: string };
       expect(disk.activeRootPath).toBe(firstId);
+    });
+  });
+
+  it("supports file delete, rename, and create routes with path safety", async () => {
+    const root = await tempProject("ainide-api-file-");
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      const created = await server.app.inject({ method: "POST", url: "/api/file/create", headers, payload: { path: "docs/new.md", type: "file" } });
+      expect(created.statusCode).toBe(200);
+      const renamed = await server.app.inject({ method: "POST", url: "/api/file/rename", headers, payload: { from: "docs/new.md", to: "docs/renamed.md" } });
+      expect(renamed.statusCode).toBe(200);
+      const deleted = await server.app.inject({ method: "DELETE", url: "/api/file?path=docs/renamed.md", headers: auth(server.token, false) });
+      expect(deleted.statusCode).toBe(200);
+      const denied = await server.app.inject({ method: "DELETE", url: "/api/file?path=../../../../etc/passwd", headers: auth(server.token, false) });
+      expect(denied.statusCode).toBe(400);
+      const conflict = await server.app.inject({ method: "POST", url: "/api/file/create", headers, payload: { path: "readme.txt", type: "file" } });
+      expect(conflict.statusCode).toBe(400);
     });
   });
 });

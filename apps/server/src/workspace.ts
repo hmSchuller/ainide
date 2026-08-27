@@ -200,6 +200,55 @@ export class WorkspaceManager {
     await fs.rename(temporary, filePath);
   }
 
+  async delete(relativePath: string): Promise<void> {
+    const root = this.requireRoot();
+    if (!relativePath) throw new Error("A relative path is required");
+    const target = await resolveSafePath(root.rootPath, relativePath);
+    await fs.rm(target, { recursive: true, force: true });
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    const root = this.requireRoot();
+    if (!from || !to) throw new Error("from and to paths are required");
+    const source = await resolveSafePath(root.rootPath, from);
+    const destination = await resolveSafePath(root.rootPath, to);
+    try {
+      await fs.access(destination);
+      throw new Error("Destination path already exists");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.rename(source, destination);
+  }
+
+  async createFile(relativePath: string): Promise<void> {
+    const root = this.requireRoot();
+    if (!relativePath) throw new Error("A relative path is required");
+    const filePath = await resolveSafePath(root.rootPath, relativePath);
+    try {
+      await fs.access(filePath);
+      throw new Error("Path already exists");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "", "utf8");
+  }
+
+  async createDirectory(relativePath: string): Promise<void> {
+    const root = this.requireRoot();
+    if (!relativePath) throw new Error("A relative path is required");
+    const dirPath = await resolveSafePath(root.rootPath, relativePath);
+    try {
+      await fs.access(dirPath);
+      throw new Error("Path already exists");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await fs.mkdir(dirPath, { recursive: true });
+  }
+
   recentFor(relativePath: string): RecentChange[] {
     return this.recent.filter((change) => change.path === relativePath || change.path.startsWith(`${relativePath}/`));
   }

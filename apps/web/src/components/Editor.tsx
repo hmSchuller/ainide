@@ -92,6 +92,55 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
       const number = Number(line);
       if (Number.isInteger(number) && number > 0) editor.revealLineInCenter(number);
     } });
+    const activeTab = (): EditorTab | undefined => {
+      const path = editorPathRef.current;
+      if (!path) return undefined;
+      return useAppStore.getState().tabs.find((tab) => tab.path === path);
+    };
+    editor.addAction({
+      id: `ainide.copy-selection-ref-${paneId}`,
+      label: "Copy as reference",
+      contextMenuGroupId: "ainide",
+      contextMenuOrder: 1,
+      precondition: "editorHasSelection",
+      run: () => {
+        const tab = activeTab();
+        const value = selection();
+        if (tab && value) onCopySelection(tab, value);
+      },
+    });
+    editor.addAction({
+      id: `ainide.add-selection-kit-${paneId}`,
+      label: "Add selection to kit",
+      contextMenuGroupId: "ainide",
+      contextMenuOrder: 2,
+      precondition: "editorHasSelection",
+      run: () => {
+        const tab = activeTab();
+        const value = selection();
+        if (tab && value) onAddSelectionToKit(tab, value);
+      },
+    });
+    editor.addAction({
+      id: `ainide.copy-file-ref-${paneId}`,
+      label: "Copy file as reference",
+      contextMenuGroupId: "ainide",
+      contextMenuOrder: 3,
+      run: () => {
+        const tab = activeTab();
+        if (tab) onCopyFile(tab);
+      },
+    });
+    editor.addAction({
+      id: `ainide.add-file-kit-${paneId}`,
+      label: "Add file to kit",
+      contextMenuGroupId: "ainide",
+      contextMenuOrder: 4,
+      run: () => {
+        const tab = activeTab();
+        if (tab) onAddFileToKit(tab);
+      },
+    });
   };
 
   useEffect(() => {
@@ -196,7 +245,7 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
           )}
           {active.error ? <div className="file-state"><span className="state-icon">!</span><h2>Could not open file</h2><p>{active.error}</p></div> : active.binary ? <div className="file-state"><span className="state-icon">◈</span><h2>Binary file</h2><p>ainide does not edit binary files.</p></div> : (
             <>
-               <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions"><button onClick={() => { const value = selection(); if (value) onCopySelection(active, value); }}>Copy as reference</button><button onClick={() => { const value = selection(); if (value) onAddSelectionToKit(active, value); }}>Add selection to kit</button><button onClick={() => onCopyFile(active)}>Copy file as reference</button><button onClick={() => onAddFileToKit(active)}>Add file to kit</button><button onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button><button className="save-mini" onClick={() => onSave(active)}>Save</button></span></div>
+               <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions"><button onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button></span></div>
               {compare && active.conflict?.externalContent !== undefined && <div className="compare-panel"><div><label>YOUR BUFFER</label><pre>{active.content}</pre></div><div><label>ON DISK</label><pre>{active.conflict.externalContent}</pre></div></div>}
               <Editor key={active.path} path={active.path} theme="vs-dark" language={active.language} value={active.content} saveViewState onMount={mount} onChange={(value) => onContentChange(active.path, value ?? "")} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", padding: { top: 10 }, scrollBeyondLastLine: false, renderWhitespace: "selection", smoothScrolling: true }} />
             </>

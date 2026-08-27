@@ -238,6 +238,27 @@ export async function createServer(): Promise<AinideServer> {
     if (typeof values.path !== "string" || typeof values.content !== "string") return reply.code(400).send({ error: "path and string content are required" });
     try { await projects.requireActive().write(values.path, values.content); return { ok: true }; } catch (error) { errorReply(reply, error); }
   });
+  app.delete("/api/file", async (request, reply) => {
+    const relativePath = queryPath(request);
+    if (!relativePath) return reply.code(400).send({ error: "path is required" });
+    try { await projects.requireActive().delete(relativePath); return { ok: true }; } catch (error) { errorReply(reply, error); }
+  });
+  app.post("/api/file/rename", async (request, reply) => {
+    const values = body(request);
+    if (typeof values.from !== "string" || typeof values.to !== "string") return reply.code(400).send({ error: "from and to are required" });
+    try { await projects.requireActive().rename(values.from, values.to); return { ok: true }; } catch (error) { errorReply(reply, error); }
+  });
+  app.post("/api/file/create", async (request, reply) => {
+    const values = body(request);
+    if (typeof values.path !== "string" || (values.type !== "file" && values.type !== "directory")) {
+      return reply.code(400).send({ error: "path and type (file or directory) are required" });
+    }
+    try {
+      if (values.type === "file") await projects.requireActive().createFile(values.path);
+      else await projects.requireActive().createDirectory(values.path);
+      return { ok: true };
+    } catch (error) { errorReply(reply, error); }
+  });
   app.get("/api/git/status", async (request, reply) => {
     try { return await projects.requireActive().refreshGit(); } catch (error) { errorReply(reply, error); }
   });

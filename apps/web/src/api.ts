@@ -156,6 +156,25 @@ export async function writeFile(path: string, content: string, token: string): P
   });
 }
 
+export async function deleteFile(path: string, token: string): Promise<void> {
+  const query = new URLSearchParams({ path });
+  await request<void>(`/api/file?${query.toString()}`, token, { method: "DELETE" });
+}
+
+export async function renameFile(from: string, to: string, token: string): Promise<void> {
+  await request<void>("/api/file/rename", token, {
+    method: "POST",
+    body: JSON.stringify({ from, to }),
+  });
+}
+
+export async function createPath(path: string, type: "file" | "directory", token: string): Promise<void> {
+  await request<void>("/api/file/create", token, {
+    method: "POST",
+    body: JSON.stringify({ path, type }),
+  });
+}
+
 export async function getTerminals(token: string): Promise<TerminalSession[]> {
   const result = await request<TerminalResponse | TerminalSession[]>("/api/terminals", token);
   return Array.isArray(result) ? result : result.sessions ?? [];

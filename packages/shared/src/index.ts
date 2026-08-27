@@ -129,6 +129,18 @@ export interface ReviewStatus {
 
 export type ReviewScope = "working-tree" | "staged" | "last-commit" | "branch-vs-main";
 
+export type FileCreateType = "file" | "directory";
+
+export interface FileRenameRequest {
+  from: string;
+  to: string;
+}
+
+export interface FileCreateRequest {
+  path: string;
+  type: FileCreateType;
+}
+
 export const DEFAULT_TERMINAL_KINDS: TerminalKind[] = ["agent", "shell", "lazygit"];
 
 export function missingTerminalKinds(

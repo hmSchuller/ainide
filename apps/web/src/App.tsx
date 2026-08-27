@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FileEntry, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
-import { closeProject, createTerminal, getGitStatus, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseEvent, readFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
+import { closeProject, createPath, createTerminal, deleteFile, getGitStatus, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
 import { EditorSurface, language } from "./components/Editor";
 import { Explorer } from "./components/Explorer";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
@@ -16,6 +16,9 @@ import { findPaneForPath, isDirty, useAppStore } from "./store";
 import type { EditorPaneId, EditorTab } from "./types";
 import type { CodeSelection } from "./references";
 import { captureFileReference, captureSelectionReference, captureTextFileReference, copyReference } from "./references";
+import { copyTextToClipboard } from "./clipboard";
+import { basenameFromPath, joinWorkspacePath, renameEntryPath } from "./explorer-actions";
+import { shouldShowReferenceDock, terminalPanelVisible } from "./layout-prefs";
 
 type PaletteAction = { label: string; shortcut?: string; run: () => void };
 
@@ -56,6 +59,7 @@ export default function App() {
   const explorerWidth = useAppStore((state) => state.explorerWidth);
   const notices = useAppStore((state) => state.notices);
   const recentChanges = useAppStore((state) => state.recentChanges);
+  const referenceKit = useAppStore((state) => state.referenceKit);
   const terminalError = useAppStore((state) => state.terminalError);
   const setToken = useAppStore((state) => state.setToken);
   const setDirectory = useAppStore((state) => state.setDirectory);
@@ -72,6 +76,7 @@ export default function App() {
   const markRecent = useAppStore((state) => state.markRecent);
   const setPendingLocation = useAppStore((state) => state.setPendingLocation);
   const setTerminalError = useAppStore((state) => state.setTerminalError);
+  const setTerminalCollapsed = useAppStore((state) => state.setTerminalCollapsed);
   const [starting, setStarting] = useState(true);
   const [pickerBusy, setPickerBusy] = useState(false);
   const [pickerError, setPickerError] = useState<string>();
@@ -418,6 +423,88 @@ export default function App() {
     }
   };
 
+  const copyExplorerPath = async (entry: FileEntry) => {
+    const ok = await copyTextToClipboard(entry.path);
+    setNotice(ok ? "Path copied" : "Could not copy path", ok ? "success" : "error");
+  };
+
+  const copyExplorerContents = async (entry: FileEntry) => {
+    if (!token) return;
+    try {
+      const result = await readFile(entry.path, token);
+      if (result.binary) { setNotice("This file cannot be copied as text", "error"); return; }
+      const ok = await copyTextToClipboard(result.content);
+      setNotice(ok ? "Contents copied" : "Could not copy contents", ok ? "success" : "error");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not read file", "error");
+    }
+  };
+
+  const createExplorerEntry = async (parentPath: string, type: "file" | "directory") => {
+    if (!token) return;
+    const name = window.prompt(type === "file" ? "New file name" : "New folder name");
+    if (!name?.trim()) return;
+    let nextPath: string;
+    try {
+      nextPath = joinWorkspacePath(parentPath, name);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Invalid name", "error");
+      return;
+    }
+    try {
+      await createPath(nextPath, type, token);
+      useAppStore.setState((state) => ({ expanded: { ...state.expanded, [parentPath]: true } }));
+      setNotice(`Created ${nextPath}`, "success");
+      await refresh();
+      if (type === "file") void openFile({ name: basenameFromPath(nextPath), path: nextPath, type: "file" });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Create failed", "error");
+    }
+  };
+
+  const renameExplorerEntry = async (entry: FileEntry) => {
+    if (!token) return;
+    const newName = window.prompt("Rename to", basenameFromPath(entry.path));
+    if (!newName?.trim() || newName.trim() === basenameFromPath(entry.path)) return;
+    let nextPath: string;
+    try {
+      nextPath = renameEntryPath(entry.path, newName);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Invalid name", "error");
+      return;
+    }
+    try {
+      await renameFile(entry.path, nextPath, token);
+      useAppStore.getState().renameTabPath(entry.path, nextPath);
+      setSelected(nextPath);
+      setNotice(`Renamed to ${nextPath}`, "success");
+      await refresh();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Rename failed", "error");
+    }
+  };
+
+  const deleteExplorerEntry = async (entry: FileEntry) => {
+    if (!token) return;
+    if (!window.confirm(`Delete ${entry.path}?`)) return;
+    if (entry.type === "file") {
+      await autoSaver.flush(entry.path);
+      const tab = useAppStore.getState().tabs.find((item) => item.path === entry.path);
+      if (tab && isDirty(tab) && !window.confirm(`Discard unsaved changes to ${tab.name} before deleting?`)) return;
+    }
+    try {
+      await deleteFile(entry.path, token);
+      const state = useAppStore.getState();
+      const paneId = findPaneForPath(state.panes, entry.path);
+      if (paneId) state.closeTab(paneId, entry.path);
+      autoSaver.cancel(entry.path);
+      setNotice(`Deleted ${basenameFromPath(entry.path)}`, "success");
+      await refresh();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Delete failed", "error");
+    }
+  };
+
   const newAgent = () => {
     const count = useAppStore.getState().terminals.filter((terminal) => terminal.kind === "agent").length;
     const title = window.prompt("Name this agent session", count === 0 ? "Implement" : count === 1 ? "Plan next task" : `Agent ${count + 1}`);
@@ -454,7 +541,12 @@ export default function App() {
       if (event.shiftKey && event.key.toLowerCase() === "p") { event.preventDefault(); setPaletteOpen(true); setQuickOpen(false); setQuery(""); }
       else if (!event.shiftKey && event.key.toLowerCase() === "p") { event.preventDefault(); setQuickOpen(true); setPaletteOpen(false); setQuery(""); }
        else if (event.key.toLowerCase() === "s") { event.preventDefault(); const activePath = panes[focusedPaneId].activePath; const tab = tabs.find((item) => item.path === activePath); if (tab) void saveFile(tab); }
-      else if (event.key.toLowerCase() === "j") { event.preventDefault(); useAppStore.setState((state) => ({ terminalCollapsed: !state.terminalCollapsed, terminalMaximized: false })); }
+       else if (event.key.toLowerCase() === "j") {
+         event.preventDefault();
+         const next = !useAppStore.getState().terminalCollapsed;
+         setTerminalCollapsed(next);
+         useAppStore.setState({ terminalMaximized: false });
+       }
        else if (event.key === "1") setMode("edit");
        else if (event.key === "2") void switchToReview();
        else if (event.key === "3") setMode("agents");
@@ -496,7 +588,16 @@ export default function App() {
         <div className="top-actions"><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
     <div className="workbench">
-        <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer onOpenFile={(entry, secondary) => void openFile(entry, secondary ? "secondary" : "primary")} onReferenceFile={(entry) => void addWholeFileReference(entry)} onRefresh={() => void refresh()} /></div>
+        <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer
+          onOpenFile={(entry, secondary) => void openFile(entry, secondary ? "secondary" : "primary")}
+          onRefresh={() => void refresh()}
+          onCopyPath={(entry) => void copyExplorerPath(entry)}
+          onCopyContents={(entry) => void copyExplorerContents(entry)}
+          onAddToReferenceKit={(entry) => void addWholeFileReference(entry)}
+          onRenameEntry={(entry) => void renameExplorerEntry(entry)}
+          onDeleteEntry={(entry) => void deleteExplorerEntry(entry)}
+          onCreateEntry={(parentPath, type) => void createExplorerEntry(parentPath, type)}
+        /></div>
       <div className="explorer-splitter" onPointerDown={(event) => {
         const move = (e: PointerEvent) => { const width = Math.max(190, Math.min(420, e.clientX)); useAppStore.setState({ explorerWidth: width }); localStorage.setItem("ainide:explorer-width", String(width)); };
         const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
@@ -514,13 +615,13 @@ export default function App() {
                onCopyFile={(tab) => void addWholeFileReference(tab, true)}
                onAddFileToKit={(tab) => void addWholeFileReference(tab)}
              />
-             <ReferenceDock />
+             {shouldShowReferenceDock(referenceKit.length) && <ReferenceDock />}
            </div>
            <div className="mode-surface" hidden={mode !== "agents"}><AgentWorkbench onNewAgent={newAgent} onNewTool={(kind) => void newTerminal(kind)} onOpenReference={openReference} /></div>
            <div className="mode-surface" hidden={mode !== "review"}>
             <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />
           </div>
-         {mode !== "agents" && <TerminalPanel onNewTerminal={(kind) => void newTerminal(kind)} onOpenReference={openReference} />}
+         {terminalPanelVisible(mode) && <TerminalPanel onNewTerminal={(kind) => void newTerminal(kind)} onOpenReference={openReference} />}
       </main>
     </div>
     <div className="notices">{notices.map((notice) => <button className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)}>{notice.text}<span>×</span></button>)}</div>

@@ -123,6 +123,8 @@ export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelP
   const activeHeight = useAppStore((state) => state.terminalHeight);
   const collapsed = useAppStore((state) => state.terminalCollapsed);
   const maximized = useAppStore((state) => state.terminalMaximized);
+  const setTerminalCollapsed = useAppStore((state) => state.setTerminalCollapsed);
+  const setTerminalMaximized = useAppStore((state) => state.setTerminalMaximized);
   const setActiveTerminal = useAppStore((state) => state.setActiveTerminal);
   const updateTerminal = useAppStore((state) => state.updateTerminal);
   const setHeight = (height: number) => {
@@ -159,8 +161,8 @@ export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelP
         <button className="new-terminal" onClick={() => onNewTerminal()} title="New shell">+</button>
       </div>
       <div className="terminal-controls">
-        <button onClick={() => useAppStore.setState({ terminalMaximized: !maximized, terminalCollapsed: false })} title="Maximize terminal">{maximized ? "⤢" : "⤡"}</button>
-        <button onClick={() => useAppStore.setState({ terminalCollapsed: !collapsed, terminalMaximized: false })} title="Collapse terminal">{collapsed ? "⌃" : "⌄"}</button>
+        <button onClick={() => setTerminalMaximized(!maximized)} title="Maximize terminal">{maximized ? "⤢" : "⤡"}</button>
+        <button onClick={() => { setTerminalCollapsed(!collapsed); if (!collapsed) setTerminalMaximized(false); }} title="Collapse terminal">{collapsed ? "⌃" : "⌄"}</button>
       </div>
     </header>
     {!collapsed && <div className="terminal-body">

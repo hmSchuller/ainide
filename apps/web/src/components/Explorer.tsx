@@ -1,12 +1,19 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { FileEntry, GitFileStatusKind } from "@ainide/shared";
 import { listFiles } from "../api";
+import { explorerMenuItemsForEntry } from "../explorer-actions";
 import { useAppStore } from "../store";
+import { ContextMenu } from "./ContextMenu";
 
 interface ExplorerProps {
   onOpenFile: (entry: FileEntry, secondary: boolean) => void;
   onRefresh: () => void;
-  onReferenceFile?: (entry: FileEntry) => void;
+  onCopyPath: (entry: FileEntry) => void;
+  onCopyContents: (entry: FileEntry) => void;
+  onAddToReferenceKit: (entry: FileEntry) => void;
+  onRenameEntry: (entry: FileEntry) => void;
+  onDeleteEntry: (entry: FileEntry) => void;
+  onCreateEntry: (parentPath: string, type: "file" | "directory") => void;
 }
 
 const statusLetters: Record<GitFileStatusKind, string> = {
@@ -22,7 +29,16 @@ function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
-export function Explorer({ onOpenFile, onRefresh, onReferenceFile }: ExplorerProps) {
+export function Explorer({
+  onOpenFile,
+  onRefresh,
+  onCopyPath,
+  onCopyContents,
+  onAddToReferenceKit,
+  onRenameEntry,
+  onDeleteEntry,
+  onCreateEntry,
+}: ExplorerProps) {
   const workspace = useAppStore((state) => state.workspace);
   const token = useAppStore((state) => state.token);
   const directories = useAppStore((state) => state.directories);
@@ -33,6 +49,7 @@ export function Explorer({ onOpenFile, onRefresh, onReferenceFile }: ExplorerPro
   const toggleDirectory = useAppStore((state) => state.toggleDirectory);
   const setSelected = useAppStore((state) => state.setSelected);
   const git = useAppStore((state) => state.git);
+  const [menu, setMenu] = useState<{ x: number; y: number; entry: FileEntry }>();
 
   const load = async (path: string) => {
     const state = useAppStore.getState();
@@ -61,6 +78,13 @@ export function Explorer({ onOpenFile, onRefresh, onReferenceFile }: ExplorerPro
     return direct?.status;
   };
 
+  const openMenu = (event: React.MouseEvent, entry: FileEntry) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelected(entry.path);
+    setMenu({ x: event.clientX, y: event.clientY, entry });
+  };
+
   const renderEntries = (path: string, depth: number): JSX.Element => {
     const directory = directories[path];
     if (!directory) return <div className="tree-message" style={{ paddingLeft: `${depth * 14 + 28}px` }}>Loading...</div>;
@@ -78,23 +102,23 @@ export function Explorer({ onOpenFile, onRefresh, onReferenceFile }: ExplorerPro
               <button
                 className={`tree-row ${selectedPath === entry.path ? "selected" : ""}`}
                 style={{ paddingLeft: `${depth * 14 + 12}px` }}
-                 onClick={(event) => {
-                   setSelected(entry.path);
-                   if (entry.type === "directory") {
-                     const opening = !expanded[entry.path];
-                     toggleDirectory(entry.path);
-                     if (opening && !directories[entry.path]) void load(entry.path);
-                   } else onOpenFile(entry, event.shiftKey);
-                 }}
+                onClick={(event) => {
+                  setSelected(entry.path);
+                  if (entry.type === "directory") {
+                    const opening = !expanded[entry.path];
+                    toggleDirectory(entry.path);
+                    if (opening && !directories[entry.path]) void load(entry.path);
+                  } else onOpenFile(entry, event.shiftKey);
+                }}
+                onContextMenu={(event) => openMenu(event, entry)}
                 title={entry.path}
               >
                 <span className="tree-chevron">{entry.type === "directory" ? (isOpen ? "⌄" : "›") : ""}</span>
                 <span className={`file-icon ${entry.type}`}>{entry.type === "directory" ? (isOpen ? "▾" : "▸") : "·"}</span>
-                 <span className="tree-name">{entry.name || basename(entry.path)}</span>
-                 {(entry.recent || (changedAt && Date.now() - changedAt < 10 * 60 * 1000)) && <span className="recent-dot" title="Recently changed externally" />}
-                 {status && <span className={`git-letter git-${status}`} title={`Git: ${status}`}>{statusLetters[status]}</span>}
-                 {entry.type === "file" && onReferenceFile && <span className="tree-reference" role="button" tabIndex={0} title="Add file to reference kit" onClick={(event) => { event.stopPropagation(); onReferenceFile(entry); }}>+</span>}
-               </button>
+                <span className="tree-name">{entry.name || basename(entry.path)}</span>
+                {(entry.recent || (changedAt && Date.now() - changedAt < 10 * 60 * 1000)) && <span className="recent-dot" title="Recently changed externally" />}
+                {status && <span className={`git-letter git-${status}`} title={`Git: ${status}`}>{statusLetters[status]}</span>}
+              </button>
               {entry.type === "directory" && isOpen && renderEntries(entry.path, depth + 1)}
             </div>
           );
@@ -115,6 +139,24 @@ export function Explorer({ onOpenFile, onRefresh, onReferenceFile }: ExplorerPro
       </header>
       <div className="tree-root">{renderEntries("", 0)}</div>
       <footer className="explorer-footer"><span className="status-pip" /> {git?.isRepository ? `${git.branch ?? "detached"} · ${git.summary.filesChanged} changed` : "Not a Git repository"}</footer>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(undefined)}
+          items={explorerMenuItemsForEntry(menu.entry, {
+            onOpen: () => onOpenFile(menu.entry, false),
+            onOpenToSide: () => onOpenFile(menu.entry, true),
+            onCopyPath: () => onCopyPath(menu.entry),
+            onCopyContents: menu.entry.type === "file" ? () => onCopyContents(menu.entry) : undefined,
+            onAddToReferenceKit: menu.entry.type === "file" ? () => onAddToReferenceKit(menu.entry) : undefined,
+            onNewFile: menu.entry.type === "directory" ? () => onCreateEntry(menu.entry.path, "file") : undefined,
+            onNewFolder: menu.entry.type === "directory" ? () => onCreateEntry(menu.entry.path, "directory") : undefined,
+            onRename: () => onRenameEntry(menu.entry),
+            onDelete: () => onDeleteEntry(menu.entry),
+          })}
+        />
+      )}
     </aside>
   );
 }

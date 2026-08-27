@@ -3,6 +3,7 @@ import type { FileEntry, GitStatus, ProjectRef, TerminalSession, Workspace } fro
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, Notice, ReviewState } from "./types";
 import type { ReferenceItem } from "./references";
 import { captureProjectBag, emptyPanes, emptyProjectBag, type ProjectUiBag } from "./project-ui";
+import { persistTerminalCollapsed, readTerminalCollapsedPreference } from "./layout-prefs";
 
 interface AppState {
   token: string;
@@ -78,6 +79,7 @@ interface AppState {
   applyDiskTabs: (tabs: EditorTab[]) => void;
   clearActiveProject: () => void;
   removeProjectBag: (projectId: string) => void;
+  renameTabPath: (from: string, to: string) => void;
 }
 
 const savedNumber = (key: string, fallback: number): number => {
@@ -109,7 +111,7 @@ export const useAppStore = create<AppState>((set) => ({
   focusedPaneId: "primary",
   terminals: [],
   referenceKit: [],
-  terminalCollapsed: false,
+  terminalCollapsed: readTerminalCollapsedPreference(),
   terminalMaximized: false,
   notices: [],
   review: { loading: false, scope: "working-tree" },
@@ -197,8 +199,14 @@ export const useAppStore = create<AppState>((set) => ({
   setNotice: (text, tone = "info") => set((current) => ({ notices: [...current.notices, { id: Date.now() + Math.random(), text, tone }] })),
   dismissNotice: (id) => set((current) => ({ notices: current.notices.filter((notice) => notice.id !== id) })),
   setMode: (mode) => set({ mode }),
-  setTerminalCollapsed: (terminalCollapsed) => set({ terminalCollapsed }),
-  setTerminalMaximized: (terminalMaximized) => set({ terminalMaximized, terminalCollapsed: false }),
+  setTerminalCollapsed: (terminalCollapsed) => {
+    persistTerminalCollapsed(terminalCollapsed);
+    set({ terminalCollapsed });
+  },
+  setTerminalMaximized: (terminalMaximized) => {
+    persistTerminalCollapsed(false);
+    set({ terminalMaximized, terminalCollapsed: false });
+  },
   setTerminalError: (terminalError) => set({ terminalError }),
   setPendingLocation: (pendingLocation) => set({ pendingLocation }),
   setProjectSession: (input) => set({
@@ -246,6 +254,19 @@ export const useAppStore = create<AppState>((set) => ({
     const projectBags = { ...current.projectBags };
     delete projectBags[projectId];
     return { projectBags };
+  }),
+  renameTabPath: (from, to) => set((current) => {
+    const name = to.split(/[\\/]/).filter(Boolean).pop() ?? to;
+    const tabs = current.tabs.map((tab) => (tab.path === from ? { ...tab, path: to, name } : tab));
+    const panes = (Object.keys(current.panes) as EditorPaneId[]).reduce<Record<EditorPaneId, EditorPaneState>>((next, paneId) => {
+      const pane = current.panes[paneId];
+      next[paneId] = {
+        tabPaths: pane.tabPaths.map((path) => (path === from ? to : path)),
+        activePath: pane.activePath === from ? to : pane.activePath,
+      };
+      return next;
+    }, emptyPanes());
+    return { tabs, panes };
   }),
 }));
 
