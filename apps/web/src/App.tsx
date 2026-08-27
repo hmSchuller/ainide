@@ -7,11 +7,15 @@ import { Explorer } from "./components/Explorer";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ReviewSurface } from "./components/ReviewSurface";
 import { TerminalPanel } from "./components/TerminalPanel";
+import { AgentWorkbench } from "./components/AgentWorkbench";
+import { ReferenceDock } from "./components/ReferenceDock";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, knownProjectSeed, snapshotFromBag } from "./project-ui";
 import { createAutoSaver } from "./auto-save";
 import { findPaneForPath, isDirty, useAppStore } from "./store";
 import type { EditorPaneId, EditorTab } from "./types";
+import type { CodeSelection } from "./references";
+import { captureFileReference, captureSelectionReference, captureTextFileReference, copyReference } from "./references";
 
 type PaletteAction = { label: string; shortcut?: string; run: () => void };
 
@@ -377,10 +381,48 @@ export default function App() {
     }
   };
 
-  const newTerminal = async (kind: TerminalSession["kind"] = "custom") => {
+  const newTerminal = async (kind: TerminalSession["kind"] = "custom", title?: string) => {
     if (!token) return;
-    try { addTerminal(await createTerminal(kind, token)); if (kind === "lazygit") setTerminalError(undefined); }
+    try {
+      const created = await createTerminal(kind, token, title);
+      addTerminal(created);
+      if (kind === "agent") useAppStore.getState().setFocusedSession(created.id);
+      if (kind === "lazygit") setTerminalError(undefined);
+    }
     catch (error) { setNotice(error instanceof Error ? error.message : "Terminal could not be started", "error"); }
+  };
+
+  const addSelectionReference = (tab: EditorTab, selection: CodeSelection, copy = false) => {
+    if (tab.binary || tab.error) { setNotice("This file cannot be copied as text", "error"); return; }
+    const reference = captureSelectionReference({ path: tab.path, content: tab.content, language: tab.language, selection });
+    if (copy) void copyReference(reference).then((result) => setNotice(result.ok ? "Selection reference copied" : result.error ?? "Could not copy reference", result.ok ? "success" : "error"));
+    else { useAppStore.getState().addReference(reference); setNotice(`Added ${tab.path} lines ${reference.startLine}-${reference.endLine} to the kit`, "success"); }
+  };
+
+  const addWholeFileReference = async (tab: EditorTab | FileEntry, copy = false) => {
+    if (!token) return;
+    const path = tab.path;
+    const openTab = "content" in tab ? tab : useAppStore.getState().tabs.find((item) => item.path === path);
+    if (openTab?.binary || openTab?.error) { setNotice("This file cannot be copied as text", "error"); return; }
+    try {
+      const reference = openTab ? captureFileReference({ path, content: openTab.content, language: openTab.language }) : await captureTextFileReference({ path, language: language(path), read: () => readFile(path, token) });
+      if (copy) {
+        const result = await copyReference(reference);
+        setNotice(result.ok ? "File reference copied" : result.error ?? "Could not copy reference", result.ok ? "success" : "error");
+      } else {
+        useAppStore.getState().addReference(reference);
+        setNotice(`Added ${path} to the reference kit`, "success");
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "This file cannot be copied as text", "error");
+    }
+  };
+
+  const newAgent = () => {
+    const count = useAppStore.getState().terminals.filter((terminal) => terminal.kind === "agent").length;
+    const title = window.prompt("Name this agent session", count === 0 ? "Implement" : count === 1 ? "Plan next task" : `Agent ${count + 1}`);
+    if (title === null) return;
+    void newTerminal("agent", title.trim() || undefined);
   };
 
   const loadedFiles = useMemo(() => Object.values(directories).flatMap((directory) => directory.entries).filter((entry, index, all) => entry.type === "file" && all.findIndex((other) => other.path === entry.path) === index), [directories]);
@@ -394,11 +436,12 @@ export default function App() {
     })),
     { label: "Close project", run: () => { setPaletteOpen(false); void closeActiveProject().catch((error) => setNotice(error instanceof Error ? error.message : "Could not close project", "error")); } },
     { label: "New Terminal", run: () => { setPaletteOpen(false); void newTerminal(); } },
-    { label: "Open Agent", run: () => { setPaletteOpen(false); void newTerminal("agent"); } },
+     { label: "Open Agent", run: () => { setPaletteOpen(false); newAgent(); } },
     { label: "Open Shell", run: () => { setPaletteOpen(false); void newTerminal("shell"); } },
     { label: "Open Lazygit", run: () => { setPaletteOpen(false); void newTerminal("lazygit"); } },
-    { label: "Switch to Edit mode", shortcut: "⌘ 1", run: () => { setMode("edit"); setPaletteOpen(false); } },
-    { label: "Switch to Review mode", shortcut: "⌘ 2", run: () => { setPaletteOpen(false); void switchToReview(); } },
+     { label: "Switch to Edit mode", shortcut: "⌘ 1", run: () => { setMode("edit"); setPaletteOpen(false); } },
+     { label: "Switch to Review mode", shortcut: "⌘ 2", run: () => { setPaletteOpen(false); void switchToReview(); } },
+     { label: "Switch to Agents mode", shortcut: "⌘ 3", run: () => { setMode("agents"); setPaletteOpen(false); } },
      { label: "Save", shortcut: "⌘ S", run: () => { const activePath = panes[focusedPaneId].activePath; const tab = tabs.find((item) => item.path === activePath); if (tab) void saveFile(tab); setPaletteOpen(false); } },
     { label: "Refresh Git and files", run: () => { setPaletteOpen(false); void refresh(); } },
      { label: "Restart Review", run: () => { setPaletteOpen(false); void switchToReview(true); } },
@@ -412,8 +455,9 @@ export default function App() {
       else if (!event.shiftKey && event.key.toLowerCase() === "p") { event.preventDefault(); setQuickOpen(true); setPaletteOpen(false); setQuery(""); }
        else if (event.key.toLowerCase() === "s") { event.preventDefault(); const activePath = panes[focusedPaneId].activePath; const tab = tabs.find((item) => item.path === activePath); if (tab) void saveFile(tab); }
       else if (event.key.toLowerCase() === "j") { event.preventDefault(); useAppStore.setState((state) => ({ terminalCollapsed: !state.terminalCollapsed, terminalMaximized: false })); }
-      else if (event.key === "1") setMode("edit");
-      else if (event.key === "2") void switchToReview();
+       else if (event.key === "1") setMode("edit");
+       else if (event.key === "2") void switchToReview();
+       else if (event.key === "3") setMode("agents");
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
@@ -448,11 +492,11 @@ export default function App() {
         onOpenAnother={() => setAddingProject(true)}
         onClose={() => void closeActiveProject().catch((error) => setNotice(error instanceof Error ? error.message : "Could not close project", "error"))}
       />
-      <div className="mode-switch" role="tablist"><button className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")}>Edit <kbd>⌘1</kbd></button><button className={mode === "review" ? "active" : ""} onClick={() => void switchToReview()}>Review <kbd>⌘2</kbd></button></div>
-       <div className="top-actions"><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
+        <div className="mode-switch" role="tablist"><button className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")}>Edit <kbd>⌘1</kbd></button><button className={mode === "agents" ? "active" : ""} onClick={() => setMode("agents")}>Agents <span className="mode-count">{terminals.filter((terminal) => terminal.kind === "agent" && terminal.alive).length}</span><kbd>⌘3</kbd></button><button className={mode === "review" ? "active" : ""} onClick={() => void switchToReview()}>Review <kbd>⌘2</kbd></button></div>
+        <div className="top-actions"><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
     <div className="workbench">
-       <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer onOpenFile={(entry, secondary) => void openFile(entry, secondary ? "secondary" : "primary")} onRefresh={() => void refresh()} /></div>
+        <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer onOpenFile={(entry, secondary) => void openFile(entry, secondary ? "secondary" : "primary")} onReferenceFile={(entry) => void addWholeFileReference(entry)} onRefresh={() => void refresh()} /></div>
       <div className="explorer-splitter" onPointerDown={(event) => {
         const move = (e: PointerEvent) => { const width = Math.max(190, Math.min(420, e.clientX)); useAppStore.setState({ explorerWidth: width }); localStorage.setItem("ainide:explorer-width", String(width)); };
         const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
@@ -460,17 +504,23 @@ export default function App() {
       }} />
        <main className="main-column">
           <div className="mode-surface" hidden={mode !== "edit"}>
-            <EditorSurface
-              onSave={(tab) => void saveFile(tab)}
-              onContentChange={handleContentChange}
-              flushAutoSave={(path) => autoSaver.flush(path)}
-              cancelAutoSave={(path) => autoSaver.cancel(path)}
-            />
-          </div>
-          <div className="mode-surface" hidden={mode !== "review"}>
+           <EditorSurface
+               onSave={(tab) => void saveFile(tab)}
+               onContentChange={handleContentChange}
+               flushAutoSave={(path) => autoSaver.flush(path)}
+               cancelAutoSave={(path) => autoSaver.cancel(path)}
+               onCopySelection={(tab, selection) => addSelectionReference(tab, selection, true)}
+               onAddSelectionToKit={(tab, selection) => addSelectionReference(tab, selection)}
+               onCopyFile={(tab) => void addWholeFileReference(tab, true)}
+               onAddFileToKit={(tab) => void addWholeFileReference(tab)}
+             />
+             <ReferenceDock />
+           </div>
+           <div className="mode-surface" hidden={mode !== "agents"}><AgentWorkbench onNewAgent={newAgent} onNewTool={(kind) => void newTerminal(kind)} onOpenReference={openReference} /></div>
+           <div className="mode-surface" hidden={mode !== "review"}>
             <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />
           </div>
-        <TerminalPanel onNewTerminal={(kind) => void newTerminal(kind)} onOpenReference={openReference} />
+         {mode !== "agents" && <TerminalPanel onNewTerminal={(kind) => void newTerminal(kind)} onOpenReference={openReference} />}
       </main>
     </div>
     <div className="notices">{notices.map((notice) => <button className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)}>{notice.text}<span>×</span></button>)}</div>

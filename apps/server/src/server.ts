@@ -4,7 +4,7 @@ import websocket from "@fastify/websocket";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { ProjectSessionSnapshot, SessionBootstrap, WorkspaceEvent } from "@ainide/shared";
+import { parseAgentSessionDescriptors, type ProjectSessionSnapshot, type SessionBootstrap, type WorkspaceEvent } from "@ainide/shared";
 import type { WebSocket } from "ws";
 import { ReviewManager } from "./review.js";
 import { TerminalError, TerminalManager } from "./terminals.js";
@@ -69,11 +69,13 @@ function snapshotPatchFrom(value: unknown): Partial<ProjectSessionSnapshot> | un
   if (record.panes && typeof record.panes === "object") patch.panes = record.panes as ProjectSessionSnapshot["panes"];
   if (typeof record.secondaryOpen === "boolean") patch.secondaryOpen = record.secondaryOpen;
   if (Array.isArray(record.expandedPaths)) patch.expandedPaths = record.expandedPaths.filter((item): item is string => typeof item === "string");
-  if (record.mode === "edit" || record.mode === "review") patch.mode = record.mode;
+  if (record.mode === "edit" || record.mode === "agents" || record.mode === "review") patch.mode = record.mode;
   if (Array.isArray(record.terminalKinds)) {
     patch.terminalKinds = record.terminalKinds.filter((item): item is ProjectSessionSnapshot["terminalKinds"][number] =>
       item === "agent" || item === "shell" || item === "lazygit" || item === "custom");
   }
+  const agentSessions = parseAgentSessionDescriptors(record.agentSessions);
+  if (agentSessions) patch.agentSessions = agentSessions;
   return Object.keys(patch).length ? patch : undefined;
 }
 
@@ -127,16 +129,28 @@ export async function createServer(): Promise<AinideServer> {
     snapshot: projects.activeId ? projects.snapshotFor(projects.activeId) : undefined,
   });
 
+  const restoreRecordedTerminals = (projectId: string): void => {
+    const snapshot = projects.snapshotFor(projectId);
+    const recordedAgents = snapshot?.agentSessions;
+    if (recordedAgents) {
+      const existingAgents = terminals.list(projectId).filter((session) => session.kind === "agent");
+      for (const descriptor of recordedAgents.slice(existingAgents.length)) {
+        try { terminals.create({ kind: "agent", title: descriptor.title }); } catch { /* A recorded agent is best effort if PTYs are unavailable. */ }
+      }
+    }
+    for (const kind of snapshot?.terminalKinds ?? []) {
+      if (kind === "agent" && recordedAgents !== undefined) continue;
+      if (terminals.listAliveKinds(projectId).includes(kind)) continue;
+      try { terminals.create({ kind }); } catch { /* Optional tools such as lazygit may be missing. */ }
+    }
+  };
+
   const stored = await loadSessionSnapshot();
   if (stored) projects.applyDiskSnapshot(stored);
   if (stored?.activeRootPath) {
     try {
       const { workspace } = await projects.open(stored.activeRootPath);
-      const recorded = projects.snapshotFor(workspace.rootPath)?.terminalKinds ?? [];
-      for (const kind of recorded) {
-        if (terminals.listAliveKinds(workspace.rootPath).includes(kind)) continue;
-        try { terminals.create({ kind }); } catch { /* Optional tools such as lazygit may be missing. */ }
-      }
+      restoreRecordedTerminals(workspace.rootPath);
     } catch {
       restoreError = `Could not open last project: ${stored.activeRootPath}`;
       await persistNow();
@@ -152,6 +166,7 @@ export async function createServer(): Promise<AinideServer> {
     const resolved = await new WorkspaceManager().validate(rawPath);
     if (projects.activeId && projects.activeId !== resolved) await review.stop();
     const result = await projects.open(rawPath);
+    restoreRecordedTerminals(result.workspace.rootPath);
     await persistNow();
     return result.workspace;
   };
@@ -177,6 +192,7 @@ export async function createServer(): Promise<AinideServer> {
       applyLeavingSnapshot(body(request).snapshot);
       if (projects.activeId && projects.activeId !== projectId) await review.stop();
       await projects.switchTo(projectId);
+      restoreRecordedTerminals(projectId);
       await persistNow();
       return projectPayload();
     } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : "Unable to switch project" }); }
@@ -231,14 +247,14 @@ export async function createServer(): Promise<AinideServer> {
   });
   app.delete("/api/terminals/:id", async (request, reply) => {
     const id = (request.params as { id: string }).id;
-    if (!terminals.remove(id)) return reply.code(404).send({ error: "Terminal session not found" });
+    if (!terminals.remove(id, projects.activeId)) return reply.code(404).send({ error: "Terminal session not found" });
     return { ok: true };
   });
   app.patch("/api/terminals/:id", async (request, reply) => {
     const id = (request.params as { id: string }).id;
     const title = body(request).title;
     if (typeof title !== "string") return reply.code(400).send({ error: "title must be a string" });
-    const renamed = terminals.rename(id, title);
+    const renamed = terminals.rename(id, title, projects.activeId);
     if (!renamed) return reply.code(404).send({ error: "Terminal session not found or title is invalid" });
     return renamed;
   });
@@ -256,7 +272,7 @@ export async function createServer(): Promise<AinideServer> {
   app.get("/terminal", { websocket: true }, (socket, request) => {
     if (requestToken(request) !== token) return socket.close(1008, "Unauthorized");
     const sessionId = (request.query as { sessionId?: unknown }).sessionId;
-    terminals.connect(socket, typeof sessionId === "string" ? sessionId : undefined);
+    terminals.connect(socket, typeof sessionId === "string" ? sessionId : undefined, projects.activeId);
   });
 
   const webDist = process.env.WEB_DIST ?? [

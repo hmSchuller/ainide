@@ -1,6 +1,7 @@
-import type { FileEntry, GitStatus, ReviewScope, SessionBootstrap, TerminalSession } from "@ainide/shared";
+import type { AppMode, FileEntry, GitStatus, ReviewScope, SessionBootstrap, TerminalSession } from "@ainide/shared";
+import type { ReferenceItem } from "./references";
 
-export type AppMode = "edit" | "review";
+export type { AppMode };
 export type EditorPaneId = "primary" | "secondary";
 
 export interface EditorPaneState {
@@ -48,3 +49,5 @@ export interface TerminalResponse {
   terminal?: TerminalSession;
   session?: TerminalSession;
 }
+
+export type ProjectReferenceKit = ReferenceItem[];

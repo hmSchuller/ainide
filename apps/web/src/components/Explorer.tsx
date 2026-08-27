@@ -6,6 +6,7 @@ import { useAppStore } from "../store";
 interface ExplorerProps {
   onOpenFile: (entry: FileEntry, secondary: boolean) => void;
   onRefresh: () => void;
+  onReferenceFile?: (entry: FileEntry) => void;
 }
 
 const statusLetters: Record<GitFileStatusKind, string> = {
@@ -21,7 +22,7 @@ function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
-export function Explorer({ onOpenFile, onRefresh }: ExplorerProps) {
+export function Explorer({ onOpenFile, onRefresh, onReferenceFile }: ExplorerProps) {
   const workspace = useAppStore((state) => state.workspace);
   const token = useAppStore((state) => state.token);
   const directories = useAppStore((state) => state.directories);
@@ -89,10 +90,11 @@ export function Explorer({ onOpenFile, onRefresh }: ExplorerProps) {
               >
                 <span className="tree-chevron">{entry.type === "directory" ? (isOpen ? "⌄" : "›") : ""}</span>
                 <span className={`file-icon ${entry.type}`}>{entry.type === "directory" ? (isOpen ? "▾" : "▸") : "·"}</span>
-                <span className="tree-name">{entry.name || basename(entry.path)}</span>
-                {(entry.recent || (changedAt && Date.now() - changedAt < 10 * 60 * 1000)) && <span className="recent-dot" title="Recently changed externally" />}
-                {status && <span className={`git-letter git-${status}`} title={`Git: ${status}`}>{statusLetters[status]}</span>}
-              </button>
+                 <span className="tree-name">{entry.name || basename(entry.path)}</span>
+                 {(entry.recent || (changedAt && Date.now() - changedAt < 10 * 60 * 1000)) && <span className="recent-dot" title="Recently changed externally" />}
+                 {status && <span className={`git-letter git-${status}`} title={`Git: ${status}`}>{statusLetters[status]}</span>}
+                 {entry.type === "file" && onReferenceFile && <span className="tree-reference" role="button" tabIndex={0} title="Add file to reference kit" onClick={(event) => { event.stopPropagation(); onReferenceFile(entry); }}>+</span>}
+               </button>
               {entry.type === "directory" && isOpen && renderEntries(entry.path, depth + 1)}
             </div>
           );

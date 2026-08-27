@@ -161,10 +161,10 @@ export async function getTerminals(token: string): Promise<TerminalSession[]> {
   return Array.isArray(result) ? result : result.sessions ?? [];
 }
 
-export async function createTerminal(kind: TerminalSession["kind"], token: string): Promise<TerminalSession> {
+export async function createTerminal(kind: TerminalSession["kind"], token: string, title?: string): Promise<TerminalSession> {
   const result = await request<TerminalResponse | TerminalSession>("/api/terminals", token, {
     method: "POST",
-    body: JSON.stringify({ kind }),
+    body: JSON.stringify({ kind, ...(title ? { title } : {}) }),
   });
   const terminal = "id" in result ? result : result.terminal ?? result.session;
   if (!terminal) throw new Error("The terminal service returned no session");
@@ -210,4 +210,46 @@ export function parseEvent(data: string): WorkspaceEvent | RecentChange | null {
   } catch {
     return null;
   }
+}
+
+export async function insertTerminalInput(token: string, sessionId: string, data: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(websocketUrl("/terminal", token, { sessionId }));
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      socket.close();
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = window.setTimeout(() => finish(new Error("Terminal handoff timed out")), 5000);
+    socket.onopen = () => socket.send(JSON.stringify({ type: "attach", sessionId }));
+    socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(String(event.data)) as { type?: string; message?: string };
+        if (message.type === "attached") {
+          socket.send(JSON.stringify({ type: "input", sessionId, data }));
+          window.clearTimeout(timer);
+          finish();
+        } else if (message.type === "error") {
+          window.clearTimeout(timer);
+          finish(new Error(message.message ?? "Terminal handoff failed"));
+        }
+      } catch {
+        window.clearTimeout(timer);
+        finish(new Error("Terminal handoff failed"));
+      }
+    };
+    socket.onerror = () => {
+      window.clearTimeout(timer);
+      finish(new Error("Terminal handoff connection failed"));
+    };
+    socket.onclose = () => {
+      if (!settled) {
+        window.clearTimeout(timer);
+        finish(new Error("Terminal handoff connection closed"));
+      }
+    };
+  });
 }

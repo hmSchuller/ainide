@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EditorTab } from "./types";
-import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, knownProjectSeed } from "./project-ui";
+import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, knownProjectSeed, snapshotFromBag } from "./project-ui";
 
 function tab(overrides: Partial<EditorTab> = {}): EditorTab {
   return { path: "src/a.ts", name: "a.ts", content: "clean", savedContent: "clean", language: "typescript", ...overrides };
@@ -44,5 +44,33 @@ describe("project UI bags", () => {
   it("seeds the picker from last-workspace only when no known projects exist", () => {
     expect(knownProjectSeed([], "/old/path")).toBe("/old/path");
     expect(knownProjectSeed([{ projectId: "/known", rootPath: "/known", name: "known" }], "/old/path")).toBe("/known");
+  });
+
+  it("keeps reference kits isolated in bags but excludes them from disk snapshots", () => {
+    const first = emptyProjectBag();
+    first.referenceKit = [{ id: "a", path: "src/a.ts", startLine: 2, endLine: 3, wholeFile: false, content: "a", language: "typescript" }];
+    first.referenceTargetId = "agent-a";
+    const second = emptyProjectBag();
+    second.referenceKit = [{ id: "b", path: "src/b.ts", wholeFile: true, content: "b", language: "typescript" }];
+    const firstBag = captureProjectBag(first);
+    const secondBag = captureProjectBag(second);
+    expect(firstBag.referenceKit).toHaveLength(1);
+    expect(secondBag.referenceKit[0]?.path).toBe("src/b.ts");
+    expect(JSON.stringify(snapshotFromBag({ rootPath: "/proj-a", name: "a" }, firstBag))).not.toContain("referenceKit");
+    expect(JSON.stringify(snapshotFromBag({ rootPath: "/proj-a", name: "a" }, firstBag))).not.toContain("agent-a");
+  });
+
+  it("restores Agents mode and records same-kind sessions without replacing them", () => {
+    const bag = emptyProjectBag();
+    bag.mode = "agents";
+    bag.terminals = [
+      { id: "one", title: "Implement", command: "ignored", cwd: "/proj-a", alive: true, kind: "agent", projectId: "/proj-a" },
+      { id: "two", title: "Plan next task", command: "ignored", cwd: "/proj-a", alive: false, kind: "agent", projectId: "/proj-a" },
+      { id: "shell", title: "Shell", command: "sh", cwd: "/proj-a", alive: true, kind: "shell", projectId: "/proj-a" },
+    ];
+    const snapshot = snapshotFromBag({ rootPath: "/proj-a", name: "a" }, captureProjectBag(bag));
+    expect(snapshot.mode).toBe("agents");
+    expect(snapshot.agentSessions).toEqual([{ title: "Implement" }, { title: "Plan next task" }]);
+    expect(snapshot.terminalKinds).toEqual(["shell"]);
   });
 });

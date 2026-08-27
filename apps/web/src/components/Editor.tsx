@@ -2,12 +2,17 @@ import { useEffect, useRef, useState, type DragEvent } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { EditorTab, EditorPaneId, EditorPaneState } from "../types";
 import { isDirty, useAppStore } from "../store";
+import type { CodeSelection } from "../references";
 
 interface EditorProps {
   onSave: (tab: EditorTab) => void;
   onContentChange: (path: string, content: string) => void;
   flushAutoSave: (path: string) => Promise<void>;
   cancelAutoSave: (path: string) => void;
+  onCopySelection: (tab: EditorTab, selection: CodeSelection) => void;
+  onAddSelectionToKit: (tab: EditorTab, selection: CodeSelection) => void;
+  onCopyFile: (tab: EditorTab) => void;
+  onAddFileToKit: (tab: EditorTab) => void;
 }
 
 const languageByExtension: Record<string, string> = {
@@ -51,9 +56,13 @@ interface EditorPaneProps {
   onContentChange: (path: string, content: string) => void;
   flushAutoSave: (path: string) => Promise<void>;
   cancelAutoSave: (path: string) => void;
+  onCopySelection: (tab: EditorTab, selection: CodeSelection) => void;
+  onAddSelectionToKit: (tab: EditorTab, selection: CodeSelection) => void;
+  onCopyFile: (tab: EditorTab) => void;
+  onAddFileToKit: (tab: EditorTab) => void;
 }
 
-function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange, flushAutoSave, cancelAutoSave }: EditorPaneProps) {
+function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit }: EditorPaneProps) {
   const active = tabs.find((tab) => tab.path === pane.activePath);
   const focusedPaneId = useAppStore((state) => state.focusedPaneId);
   const updateTab = useAppStore((state) => state.updateTab);
@@ -138,6 +147,12 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
     setDropIndex(undefined);
   };
 
+  const selection = (): CodeSelection | undefined => {
+    const value = editorRef.current?.getSelection();
+    if (!value || value.isEmpty()) return undefined;
+    return { startLineNumber: value.startLineNumber, endLineNumber: value.endLineNumber };
+  };
+
   return (
     <section
       className={`editor-pane ${focusedPaneId === paneId ? "focused" : ""}`}
@@ -181,7 +196,7 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
           )}
           {active.error ? <div className="file-state"><span className="state-icon">!</span><h2>Could not open file</h2><p>{active.error}</p></div> : active.binary ? <div className="file-state"><span className="state-icon">◈</span><h2>Binary file</h2><p>ainide does not edit binary files.</p></div> : (
             <>
-              <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions"><button onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button><button className="save-mini" onClick={() => onSave(active)}>Save</button></span></div>
+               <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions"><button onClick={() => { const value = selection(); if (value) onCopySelection(active, value); }}>Copy as reference</button><button onClick={() => { const value = selection(); if (value) onAddSelectionToKit(active, value); }}>Add selection to kit</button><button onClick={() => onCopyFile(active)}>Copy file as reference</button><button onClick={() => onAddFileToKit(active)}>Add file to kit</button><button onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button><button className="save-mini" onClick={() => onSave(active)}>Save</button></span></div>
               {compare && active.conflict?.externalContent !== undefined && <div className="compare-panel"><div><label>YOUR BUFFER</label><pre>{active.content}</pre></div><div><label>ON DISK</label><pre>{active.conflict.externalContent}</pre></div></div>}
               <Editor key={active.path} path={active.path} theme="vs-dark" language={active.language} value={active.content} saveViewState onMount={mount} onChange={(value) => onContentChange(active.path, value ?? "")} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", padding: { top: 10 }, scrollBeyondLastLine: false, renderWhitespace: "selection", smoothScrolling: true }} />
             </>
@@ -192,12 +207,12 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
   );
 }
 
-export function EditorSurface({ onSave, onContentChange, flushAutoSave, cancelAutoSave }: EditorProps) {
+export function EditorSurface({ onSave, onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit }: EditorProps) {
   const tabs = useAppStore((state) => state.tabs);
   const panes = useAppStore((state) => state.panes);
   const secondaryOpen = useAppStore((state) => state.secondaryOpen);
   const paneIds: EditorPaneId[] = secondaryOpen ? ["primary", "secondary"] : ["primary"];
-  const paneProps = { onSave, onContentChange, flushAutoSave, cancelAutoSave, secondaryOpen };
+  const paneProps = { onSave, onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit, secondaryOpen };
 
   return <section className={`editor-area ${secondaryOpen ? "split" : ""}`}>
     <div className="editor-layout">

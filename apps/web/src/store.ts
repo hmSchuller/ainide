@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { FileEntry, GitStatus, ProjectRef, TerminalSession, Workspace } from "@ainide/shared";
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, Notice, ReviewState } from "./types";
+import type { ReferenceItem } from "./references";
 import { captureProjectBag, emptyPanes, emptyProjectBag, type ProjectUiBag } from "./project-ui";
 
 interface AppState {
@@ -24,6 +25,11 @@ interface AppState {
   git?: GitStatus;
   terminals: TerminalSession[];
   activeTerminalId?: string;
+  referenceKit: ReferenceItem[];
+  focusedSessionId?: string;
+  pinnedSessionId?: string;
+  toolSessionId?: string;
+  referenceTargetId?: string;
   terminalCollapsed: boolean;
   terminalMaximized: boolean;
   notices: Notice[];
@@ -50,6 +56,13 @@ interface AppState {
   updateTerminal: (id: string, update: Partial<TerminalSession>) => void;
   removeTerminal: (id: string) => void;
   setActiveTerminal: (id: string) => void;
+  addReference: (reference: ReferenceItem) => void;
+  removeReference: (id: string) => void;
+  clearReferences: () => void;
+  setFocusedSession: (id?: string) => void;
+  setPinnedSession: (id?: string) => void;
+  setToolSession: (id?: string) => void;
+  setReferenceTarget: (id?: string) => void;
   setReview: (review: Partial<ReviewState>) => void;
   markRecent: (path: string) => void;
   setNotice: (text: string, tone?: Notice["tone"]) => void;
@@ -95,6 +108,7 @@ export const useAppStore = create<AppState>((set) => ({
   secondaryOpen: false,
   focusedPaneId: "primary",
   terminals: [],
+  referenceKit: [],
   terminalCollapsed: false,
   terminalMaximized: false,
   notices: [],
@@ -154,11 +168,30 @@ export const useAppStore = create<AppState>((set) => ({
     return { panes: { primary: { tabPaths, activePath: primary.activePath ?? secondary.activePath }, secondary: { tabPaths: [], activePath: undefined } }, secondaryOpen: false, focusedPaneId: "primary" };
   }),
   setGit: (git) => set({ git }),
-  setTerminals: (terminals) => set((current) => ({ terminals, activeTerminalId: current.activeTerminalId && terminals.some((item) => item.id === current.activeTerminalId) ? current.activeTerminalId : terminals[0]?.id })),
+  setTerminals: (terminals) => set((current) => {
+    const ids = new Set(terminals.map((terminal) => terminal.id));
+    const agents = terminals.filter((terminal) => terminal.kind === "agent");
+    const tools = terminals.filter((terminal) => terminal.kind !== "agent");
+    return {
+      terminals,
+      activeTerminalId: current.activeTerminalId && ids.has(current.activeTerminalId) ? current.activeTerminalId : terminals[0]?.id,
+      focusedSessionId: current.focusedSessionId && ids.has(current.focusedSessionId) ? current.focusedSessionId : agents[0]?.id,
+      pinnedSessionId: current.pinnedSessionId && ids.has(current.pinnedSessionId) ? current.pinnedSessionId : undefined,
+      toolSessionId: current.toolSessionId && ids.has(current.toolSessionId) ? current.toolSessionId : tools[0]?.id,
+      referenceTargetId: current.referenceTargetId && terminals.some((terminal) => terminal.id === current.referenceTargetId && terminal.kind === "agent" && terminal.alive) ? current.referenceTargetId : undefined,
+    };
+  }),
   addTerminal: (terminal) => set((current) => ({ terminals: [...current.terminals, terminal], activeTerminalId: terminal.id })),
   updateTerminal: (id, update) => set((current) => ({ terminals: current.terminals.map((terminal) => terminal.id === id ? { ...terminal, ...update } : terminal) })),
   removeTerminal: (id) => set((current) => ({ terminals: current.terminals.filter((item) => item.id !== id), activeTerminalId: current.activeTerminalId === id ? current.terminals.find((item) => item.id !== id)?.id : current.activeTerminalId })),
   setActiveTerminal: (activeTerminalId) => set({ activeTerminalId }),
+  addReference: (reference) => set((current) => ({ referenceKit: [...current.referenceKit, reference] })),
+  removeReference: (id) => set((current) => ({ referenceKit: current.referenceKit.filter((reference) => reference.id !== id) })),
+  clearReferences: () => set({ referenceKit: [] }),
+  setFocusedSession: (focusedSessionId) => set({ focusedSessionId }),
+  setPinnedSession: (pinnedSessionId) => set({ pinnedSessionId }),
+  setToolSession: (toolSessionId) => set({ toolSessionId }),
+  setReferenceTarget: (referenceTargetId) => set({ referenceTargetId }),
   setReview: (review) => set((current) => ({ review: { ...current.review, ...review } })),
   markRecent: (path) => set((current) => ({ recentChanges: { ...current.recentChanges, [path]: Date.now() } })),
   setNotice: (text, tone = "info") => set((current) => ({ notices: [...current.notices, { id: Date.now() + Math.random(), text, tone }] })),
@@ -194,6 +227,11 @@ export const useAppStore = create<AppState>((set) => ({
       git: bag.git,
       terminals: bag.terminals,
       activeTerminalId: bag.activeTerminalId,
+      referenceKit: bag.referenceKit,
+      focusedSessionId: bag.focusedSessionId,
+      pinnedSessionId: bag.pinnedSessionId,
+      toolSessionId: bag.toolSessionId,
+      referenceTargetId: bag.referenceTargetId,
       recentChanges: bag.recentChanges,
       review: { ...bag.review, url: undefined, message: undefined, loading: false },
     };

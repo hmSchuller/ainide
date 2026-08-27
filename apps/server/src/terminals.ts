@@ -88,31 +88,28 @@ export class TerminalManager {
     return { ...session };
   }
 
-  remove(id: string): boolean {
+  remove(id: string, projectId = this.getCwd()): boolean {
     const live = this.sessions.get(id);
-    if (!live) return false;
-    if (live.session.alive) live.process.kill();
-    for (const client of live.clients) client.close();
-    this.sessions.delete(id);
-    return true;
+    if (!live || !projectId || live.session.projectId !== projectId) return false;
+    return this.removeLive(id, live);
   }
 
-  rename(id: string, title: string): TerminalSession | undefined {
+  rename(id: string, title: string, projectId = this.getCwd()): TerminalSession | undefined {
     const live = this.sessions.get(id);
     const cleanTitle = title.trim();
-    if (!live || !cleanTitle || cleanTitle.length > 80) return undefined;
+    if (!live || !projectId || live.session.projectId !== projectId || !cleanTitle || cleanTitle.length > 80) return undefined;
     live.session.title = cleanTitle;
     return { ...live.session };
   }
 
-  connect(socket: WebSocket, initialId?: string): void {
+  connect(socket: WebSocket, initialId?: string, projectId?: string): void {
     if (!initialId) {
       const waitForAttach = (raw: Buffer | string) => {
         try {
-          const message = JSON.parse(raw.toString()) as TerminalClientMessage;
+          const message = parseClientMessage(JSON.parse(raw.toString()));
           if (message.type !== "attach") throw new Error("The first terminal message must be attach");
           socket.removeListener("message", waitForAttach);
-          this.attach(message.sessionId, socket);
+          this.attach(message.sessionId, socket, projectId);
         } catch (error) {
           socket.send(JSON.stringify({ type: "error", message: error instanceof Error ? error.message : "Invalid terminal message" }));
         }
@@ -120,13 +117,14 @@ export class TerminalManager {
       socket.on("message", waitForAttach);
       return;
     }
-    this.attach(initialId, socket);
+    this.attach(initialId, socket, projectId);
   }
 
-  private attach(id: string, socket: WebSocket): void {
+  private attach(id: string, socket: WebSocket, projectId?: string): void {
     const live = this.sessions.get(id);
-    if (!live) {
-      socket.send(JSON.stringify({ type: "error", message: "Terminal session not found" }));
+    const activeProjectId = this.getCwd();
+    if (!live || !activeProjectId || live.session.projectId !== activeProjectId || (projectId !== undefined && live.session.projectId !== projectId)) {
+      socket.send(JSON.stringify({ type: "error", message: live ? "Terminal session does not belong to the active project" : "Terminal session not found" }));
       socket.close(1008);
       return;
     }
@@ -138,10 +136,15 @@ export class TerminalManager {
     socket.on("close", remove);
     socket.on("message", (raw) => {
       try {
-        const message = JSON.parse(raw.toString()) as TerminalClientMessage;
+        const message = parseClientMessage(JSON.parse(raw.toString()));
         if (message.type !== "attach" && message.sessionId !== id) throw new Error("Session id does not match this connection");
-        if (message.type === "input") live.process.write(message.data);
+        if (message.type === "input") {
+          if (!this.isActiveProject(live)) return this.reject(socket, "Terminal session does not belong to the active project");
+          if (!live.session.alive) return this.reject(socket, "Terminal session is not alive");
+          live.process.write(message.data);
+        }
         else if (message.type === "resize") {
+          if (!this.isActiveProject(live)) return this.reject(socket, "Terminal session does not belong to the active project");
           if (!validDimension(message.cols, undefined) || !validDimension(message.rows, undefined)) throw new Error("Invalid terminal dimensions");
           live.process.resize(message.cols, message.rows);
         }
@@ -153,12 +156,12 @@ export class TerminalManager {
 
   closeByProject(projectId: string): void {
     for (const [id, live] of this.sessions) {
-      if (live.session.projectId === projectId) this.remove(id);
+      if (live.session.projectId === projectId) this.removeLive(id, live);
     }
   }
 
   close(): void {
-    for (const id of this.sessions.keys()) this.remove(id);
+    for (const [id, live] of this.sessions) this.removeLive(id, live);
   }
 
   private broadcast(live: LiveTerminal, message: TerminalServerMessage): void {
@@ -166,6 +169,23 @@ export class TerminalManager {
     for (const client of live.clients) {
       if (client.readyState === 1) client.send(serialized);
     }
+  }
+
+  private isActiveProject(live: LiveTerminal): boolean {
+    const activeProjectId = this.getCwd();
+    return Boolean(activeProjectId && live.session.projectId === activeProjectId);
+  }
+
+  private reject(socket: WebSocket, message: string): void {
+    socket.send(JSON.stringify({ type: "error", message }));
+    socket.close(1008, message);
+  }
+
+  private removeLive(id: string, live: LiveTerminal): boolean {
+    if (live.session.alive) live.process.kill();
+    for (const client of live.clients) client.close();
+    this.sessions.delete(id);
+    return true;
   }
 }
 
@@ -188,4 +208,18 @@ function isAvailable(command: string): boolean {
 
 function titleFor(kind: TerminalSession["kind"]): string {
   return kind === "lazygit" ? "Lazygit" : kind.charAt(0).toUpperCase() + kind.slice(1);
+}
+
+function parseClientMessage(value: unknown): TerminalClientMessage {
+  if (!value || typeof value !== "object") throw new Error("Invalid terminal message");
+  const message = value as Record<string, unknown>;
+  if ((message.type !== "attach" && message.type !== "input" && message.type !== "resize") || typeof message.sessionId !== "string" || !message.sessionId) {
+    throw new Error("Invalid terminal message");
+  }
+  if (message.type === "input") {
+    if (typeof message.data !== "string") throw new Error("Terminal input must be a string");
+    return { type: "input", sessionId: message.sessionId, data: message.data };
+  }
+  if (message.type === "resize") return { type: "resize", sessionId: message.sessionId, cols: message.cols as number, rows: message.rows as number };
+  return { type: "attach", sessionId: message.sessionId };
 }

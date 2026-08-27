@@ -1,5 +1,6 @@
 import type { GitStatus, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace, WorkspaceEvent } from "@ainide/shared";
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, ReviewState } from "./types";
+import type { ReferenceItem } from "./references";
 
 export interface ProjectUiBag {
   mode: AppMode;
@@ -13,6 +14,11 @@ export interface ProjectUiBag {
   git?: GitStatus;
   terminals: TerminalSession[];
   activeTerminalId?: string;
+  referenceKit: ReferenceItem[];
+  focusedSessionId?: string;
+  pinnedSessionId?: string;
+  toolSessionId?: string;
+  referenceTargetId?: string;
   recentChanges: Record<string, number>;
   review: ReviewState;
 }
@@ -36,6 +42,7 @@ export function emptyProjectBag(): ProjectUiBag {
     secondaryOpen: false,
     focusedPaneId: "primary",
     terminals: [],
+    referenceKit: [],
     recentChanges: {},
     review: { loading: false, scope: "working-tree" },
   };
@@ -57,6 +64,11 @@ export function captureProjectBag(state: ProjectUiBag): ProjectUiBag {
     git: state.git,
     terminals: [...state.terminals],
     activeTerminalId: state.activeTerminalId,
+    referenceKit: [...state.referenceKit],
+    focusedSessionId: state.focusedSessionId,
+    pinnedSessionId: state.pinnedSessionId,
+    toolSessionId: state.toolSessionId,
+    referenceTargetId: state.referenceTargetId,
     recentChanges: { ...state.recentChanges },
     review: { ...state.review },
   };
@@ -93,7 +105,8 @@ export function snapshotFromBag(workspace: Workspace, bag: ProjectUiBag): Projec
     secondaryOpen: bag.secondaryOpen,
     expandedPaths: Object.entries(bag.expanded).flatMap(([path, open]) => open ? [path] : []),
     mode: bag.mode,
-    terminalKinds: [...new Set(bag.terminals.filter((terminal) => terminal.alive).map((terminal) => terminal.kind))],
+    terminalKinds: [...new Set(bag.terminals.filter((terminal) => terminal.alive && terminal.kind !== "agent").map((terminal) => terminal.kind))],
+    agentSessions: bag.terminals.filter((terminal) => terminal.kind === "agent").map((terminal) => ({ title: terminal.title })),
   };
 }
 

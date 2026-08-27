@@ -11,7 +11,7 @@ interface TerminalPanelProps {
   onOpenReference: (path: string, line: number, column?: number) => void;
 }
 
-function TerminalView({ session, onOpenReference }: { session: TerminalSession; onOpenReference: TerminalPanelProps["onOpenReference"] }) {
+export function TerminalView({ session, onOpenReference }: { session: TerminalSession; onOpenReference: TerminalPanelProps["onOpenReference"] }) {
   const token = useAppStore((state) => state.token);
   const workspace = useAppStore((state) => state.workspace);
   const mountRef = useRef<HTMLDivElement>(null);
@@ -37,17 +37,23 @@ function TerminalView({ session, onOpenReference }: { session: TerminalSession; 
     const observer = new ResizeObserver(resize);
     observer.observe(mountRef.current);
     const socket = new WebSocket(websocketUrl("/terminal", token, { sessionId: session.id }));
+    let disposed = false;
     socketRef.current = socket;
     socket.onopen = () => {
+      if (disposed) { socket.close(); return; }
       setConnection("connected");
       socket.send(JSON.stringify({ type: "attach", sessionId: session.id }));
       resize();
     };
     socket.onmessage = (event) => {
       try {
-        const message = JSON.parse(String(event.data)) as { type?: string; data?: string; exitCode?: number | null };
-        if (message.type === "output") terminal.write(message.data ?? "");
-        if (message.type === "exit") {
+        const message = JSON.parse(String(event.data)) as { type?: string; data?: string; message?: string; exitCode?: number | null };
+         if (message.type === "output") terminal.write(message.data ?? "");
+         if (message.type === "error") {
+           setConnection("closed");
+           setError(message.message ?? "Terminal connection was rejected");
+         }
+         if (message.type === "exit") {
           updateTerminal(session.id, { alive: false });
           terminal.write(`\r\n\x1b[90m[process exited${message.exitCode == null ? "" : ` with ${message.exitCode}`} ]\x1b[0m\r\n`);
           setError(session.kind === "lazygit" ? "Lazygit is not available in this workspace." : undefined);
@@ -56,8 +62,8 @@ function TerminalView({ session, onOpenReference }: { session: TerminalSession; 
         terminal.write(String(event.data));
       }
     };
-    socket.onerror = () => { setConnection("closed"); setError("Terminal connection failed. Is the server running?"); };
-    socket.onclose = () => setConnection("closed");
+    socket.onerror = () => { if (!disposed) { setConnection("closed"); setError("Terminal connection failed. Is the server running?"); } };
+    socket.onclose = () => { if (!disposed) setConnection("closed"); };
     terminal.registerLinkProvider({
       provideLinks: (lineNumber, callback) => {
         const text = terminal.buffer.active.getLine(lineNumber - 1)?.translateToString() ?? "";
@@ -89,9 +95,13 @@ function TerminalView({ session, onOpenReference }: { session: TerminalSession; 
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", sessionId: session.id, data }));
     });
     return () => {
+      disposed = true;
       observer.disconnect();
       input.dispose();
-      socket.close();
+      if (socket.readyState === WebSocket.CONNECTING) {
+        socket.onopen = () => socket.close();
+        socket.onerror = null;
+      } else if (socket.readyState === WebSocket.OPEN) socket.close();
       terminal.dispose();
       socketRef.current = null;
     };
@@ -104,7 +114,9 @@ function TerminalView({ session, onOpenReference }: { session: TerminalSession; 
 }
 
 export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelProps) {
-  const terminals = useAppStore((state) => state.terminals);
+  const allTerminals = useAppStore((state) => state.terminals);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const terminals = allTerminals.filter((terminal) => terminal.projectId === activeProjectId && terminal.kind !== "agent");
   const token = useAppStore((state) => state.token);
   const activeTerminalId = useAppStore((state) => state.activeTerminalId);
   const terminalError = useAppStore((state) => state.terminalError);
@@ -119,6 +131,7 @@ export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelP
     persistLayout(undefined, next);
   };
   const dragging = useRef(false);
+  const selectedTerminalId = terminals.some((terminal) => terminal.id === activeTerminalId) ? activeTerminalId : terminals[0]?.id;
   useEffect(() => {
     const move = (event: PointerEvent) => { if (dragging.current) setHeight(window.innerHeight - event.clientY); };
     const up = () => { dragging.current = false; };
@@ -151,8 +164,8 @@ export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelP
       </div>
     </header>
     {!collapsed && <div className="terminal-body">
-      {terminalError && (!activeTerminalId || terminals.find((terminal) => terminal.id === activeTerminalId)?.kind === "lazygit") && <div className="terminal-error-state"><b>{terminalError}</b><span>Open Shell from the command palette to continue.</span></div>}
-      {terminals.length === 0 ? <div className="terminal-empty">No terminal sessions. Use <button onClick={() => onNewTerminal("shell")}>+ Shell</button> to start one.</div> : terminals.map((terminal) => <div className={`terminal-instance ${terminal.id === activeTerminalId ? "visible" : "hidden"}`} key={terminal.id}><TerminalView session={terminal} onOpenReference={onOpenReference} /><button className="terminal-close" onClick={() => void close(terminal)} title="Close terminal">×</button></div>)}
+       {terminalError && (!selectedTerminalId || terminals.find((terminal) => terminal.id === selectedTerminalId)?.kind === "lazygit") && <div className="terminal-error-state"><b>{terminalError}</b><span>Open Shell from the command palette to continue.</span></div>}
+       {terminals.length === 0 ? <div className="terminal-empty">No terminal sessions. Use <button onClick={() => onNewTerminal("shell")}>+ Shell</button> to start one.</div> : terminals.map((terminal) => <div className={`terminal-instance ${terminal.id === selectedTerminalId ? "visible" : "hidden"}`} key={terminal.id}><TerminalView session={terminal} onOpenReference={onOpenReference} /><button className="terminal-close" onClick={() => void close(terminal)} title="Close terminal">×</button></div>)}
     </div>}
   </section>;
 }

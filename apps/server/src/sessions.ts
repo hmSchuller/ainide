@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { ProjectSessionSnapshot, SessionSnapshot, TerminalKind } from "@ainide/shared";
+import { parseAgentSessionDescriptors, type ProjectSessionSnapshot, type SessionSnapshot, type TerminalKind } from "@ainide/shared";
 import { sessionsFilePath } from "./config.js";
 
 const SESSION_VERSION = 1;
@@ -31,7 +31,7 @@ export function parseSessionSnapshot(value: unknown): SessionSnapshot | undefine
   }) : [];
   const activeRootPath = typeof record.activeRootPath === "string" && record.activeRootPath ? record.activeRootPath : undefined;
   return {
-    version: typeof record.version === "number" ? record.version : SESSION_VERSION,
+    version: typeof record.version === "number" && Number.isFinite(record.version) ? record.version : SESSION_VERSION,
     ...(activeRootPath ? { activeRootPath } : {}),
     projects,
   };
@@ -41,19 +41,23 @@ export function sanitizeSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
   return {
     version: SESSION_VERSION,
     ...(snapshot.activeRootPath ? { activeRootPath: snapshot.activeRootPath } : {}),
-    projects: snapshot.projects.map((project) => ({
-      rootPath: project.rootPath,
-      name: project.name,
-      openFilePaths: [...project.openFilePaths],
-      panes: {
-        primary: { tabPaths: [...project.panes.primary.tabPaths], ...(project.panes.primary.activePath ? { activePath: project.panes.primary.activePath } : {}) },
-        secondary: { tabPaths: [...project.panes.secondary.tabPaths], ...(project.panes.secondary.activePath ? { activePath: project.panes.secondary.activePath } : {}) },
-      },
-      secondaryOpen: project.secondaryOpen,
-      expandedPaths: [...project.expandedPaths],
-      mode: project.mode === "review" ? "review" : "edit",
-      terminalKinds: project.terminalKinds.filter((kind) => TERMINAL_KINDS.has(kind)),
-    })),
+    projects: snapshot.projects.map((project) => {
+      const agentSessions = parseAgentSessionDescriptors(project.agentSessions);
+      return {
+        rootPath: project.rootPath,
+        name: project.name,
+        openFilePaths: [...project.openFilePaths],
+        panes: {
+          primary: { tabPaths: [...project.panes.primary.tabPaths], ...(project.panes.primary.activePath ? { activePath: project.panes.primary.activePath } : {}) },
+          secondary: { tabPaths: [...project.panes.secondary.tabPaths], ...(project.panes.secondary.activePath ? { activePath: project.panes.secondary.activePath } : {}) },
+        },
+        secondaryOpen: project.secondaryOpen,
+        expandedPaths: [...project.expandedPaths],
+        mode: project.mode === "agents" ? "agents" : project.mode === "review" ? "review" : "edit",
+        terminalKinds: project.terminalKinds.filter((kind) => TERMINAL_KINDS.has(kind)),
+        ...(agentSessions ? { agentSessions } : {}),
+      };
+    }),
   };
 }
 
@@ -65,6 +69,7 @@ function parseProjectSnapshot(value: unknown): ProjectSessionSnapshot | undefine
   const terminalKinds = Array.isArray(record.terminalKinds)
     ? record.terminalKinds.filter((kind): kind is TerminalKind => typeof kind === "string" && TERMINAL_KINDS.has(kind as TerminalKind))
     : [];
+  const agentSessions = parseAgentSessionDescriptors(record.agentSessions);
   return {
     rootPath: record.rootPath,
     name: typeof record.name === "string" && record.name ? record.name : path.basename(record.rootPath) || record.rootPath,
@@ -72,8 +77,9 @@ function parseProjectSnapshot(value: unknown): ProjectSessionSnapshot | undefine
     panes,
     secondaryOpen: record.secondaryOpen === true,
     expandedPaths: stringArray(record.expandedPaths),
-    mode: record.mode === "review" ? "review" : "edit",
+    mode: record.mode === "agents" ? "agents" : record.mode === "review" ? "review" : "edit",
     terminalKinds,
+    ...(agentSessions ? { agentSessions } : {}),
   };
 }
 
@@ -101,7 +107,7 @@ function stripSecrets(value: unknown): unknown {
   if (value && typeof value === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-      if (key === "token" || key === "sessionToken" || key === "content") continue;
+      if (["token", "tokens", "sessionToken", "content", "ptyId", "ptyID", "processId", "pid", "scrollback", "command", "commands", "referenceKit", "referenceKits"].includes(key)) continue;
       result[key] = stripSecrets(nested);
     }
     return result;

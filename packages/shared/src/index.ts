@@ -49,6 +49,10 @@ export interface TerminalSession {
   projectId: string;
 }
 
+export interface AgentSessionDescriptor {
+  title: string;
+}
+
 export type TerminalClientMessage =
   | { type: "input"; sessionId: string; data: string }
   | { type: "resize"; sessionId: string; cols: number; rows: number }
@@ -91,8 +95,9 @@ export interface ProjectSessionSnapshot {
   };
   secondaryOpen: boolean;
   expandedPaths: string[];
-  mode: "edit" | "review";
+  mode: AppMode;
   terminalKinds: TerminalKind[];
+  agentSessions?: AgentSessionDescriptor[];
 }
 
 export interface SessionSnapshot {
@@ -110,6 +115,8 @@ export interface SessionBootstrap {
   snapshot?: ProjectSessionSnapshot;
   restoreError?: string;
 }
+
+export type AppMode = "edit" | "agents" | "review";
 
 export interface ReviewStatus {
   running: boolean;
@@ -130,4 +137,15 @@ export function missingTerminalKinds(
 ): TerminalKind[] {
   const living = new Set(sessions.filter((session) => session.alive).map((session) => session.kind));
   return wanted.filter((kind) => !living.has(kind));
+}
+
+export function parseAgentSessionDescriptors(value: unknown): AgentSessionDescriptor[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const title = (item as Record<string, unknown>).title;
+    if (typeof title !== "string") return [];
+    const cleanTitle = title.trim();
+    return cleanTitle && cleanTitle.length <= 80 ? [{ title: cleanTitle }] : [];
+  });
 }

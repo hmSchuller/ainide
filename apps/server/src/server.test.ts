@@ -14,10 +14,12 @@ async function tempProject(prefix: string): Promise<string> {
   return root;
 }
 
-async function withServer(run: (server: AinideServer, sessionsPath: string) => Promise<void>, sessionsPath?: string): Promise<void> {
+async function withServer(run: (server: AinideServer, sessionsPath: string) => Promise<void>, sessionsPath?: string, configPath?: string): Promise<void> {
   const filePath = sessionsPath ?? path.join(await mkdtemp(path.join(os.tmpdir(), "ainide-api-")), "sessions.json");
   const previous = process.env.AINIDE_SESSIONS;
+  const previousConfig = process.env.AINIDE_CONFIG;
   process.env.AINIDE_SESSIONS = filePath;
+  if (configPath) process.env.AINIDE_CONFIG = configPath;
   const server = await createServer();
   try {
     await run(server, filePath);
@@ -25,6 +27,8 @@ async function withServer(run: (server: AinideServer, sessionsPath: string) => P
     await server.close();
     if (previous === undefined) delete process.env.AINIDE_SESSIONS;
     else process.env.AINIDE_SESSIONS = previous;
+    if (previousConfig === undefined) delete process.env.AINIDE_CONFIG;
+    else process.env.AINIDE_CONFIG = previousConfig;
   }
 }
 
@@ -132,6 +136,76 @@ describe("project HTTP API", () => {
       expect(session.json().restoreError).toMatch(/Could not open last project/);
       expect(session.json().knownProjects).toEqual([expect.objectContaining({ name: "gone-project" })]);
     }, missingSessions);
+  });
+
+  it("restores every recorded agent descriptor and falls back to legacy agent kinds", async () => {
+    const root = await tempProject("ainide-api-agent-restore-");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-api-agent-snap-"));
+    const configPath = path.join(dir, "config.json");
+    await writeFile(configPath, JSON.stringify({ agentCommand: "sleep 30", defaultShell: "/bin/sh" }));
+    const sessionsPath = path.join(dir, "sessions.json");
+    await saveSessionSnapshot({
+      version: 1,
+      activeRootPath: root,
+      projects: [{
+        rootPath: root,
+        name: "restored",
+        openFilePaths: [],
+        panes: { primary: { tabPaths: [] }, secondary: { tabPaths: [] } },
+        secondaryOpen: false,
+        expandedPaths: [],
+        mode: "agents",
+        terminalKinds: ["agent"],
+        agentSessions: [{ title: "Implement" }, { title: "Plan next task" }],
+      }],
+    }, sessionsPath);
+    await withServer(async (server) => {
+      const agents = server.terminals.list(server.projects.activeId).filter((session) => session.kind === "agent");
+      expect(agents.map((session) => session.title)).toEqual(["Implement", "Plan next task"]);
+      expect(agents.every((session) => session.command === "sleep 30")).toBe(true);
+    }, sessionsPath, configPath);
+
+    const legacySessionsPath = path.join(dir, "legacy-sessions.json");
+    await saveSessionSnapshot({
+      version: 1,
+      activeRootPath: root,
+      projects: [{
+        rootPath: root,
+        name: "legacy",
+        openFilePaths: [],
+        panes: { primary: { tabPaths: [] }, secondary: { tabPaths: [] } },
+        secondaryOpen: false,
+        expandedPaths: [],
+        mode: "edit",
+        terminalKinds: ["agent"],
+      }],
+    }, legacySessionsPath);
+    await withServer(async (server) => {
+      const agents = server.terminals.list(server.projects.activeId).filter((session) => session.kind === "agent");
+      expect(agents).toHaveLength(1);
+      expect(agents[0]).toEqual(expect.objectContaining({ title: "Agent", command: "sleep 30" }));
+    }, legacySessionsPath, configPath);
+  });
+
+  it("limits terminal listing, rename, and removal to the active project", async () => {
+    const first = await tempProject("ainide-api-terminal-owner-a-");
+    const second = await tempProject("ainide-api-terminal-owner-b-");
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      const opened = await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: first } });
+      const firstId = opened.json().activeProjectId as string;
+      const created = await server.app.inject({ method: "POST", url: "/api/terminals", headers, payload: { kind: "agent", title: "First" } });
+      const terminalId = created.json().id as string;
+      const other = await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: second } });
+
+      expect((await server.app.inject({ method: "GET", url: "/api/terminals", headers })).json()).toEqual([]);
+      expect((await server.app.inject({ method: "PATCH", url: `/api/terminals/${terminalId}`, headers, payload: { title: "Wrong project" } })).statusCode).toBe(404);
+      expect((await server.app.inject({ method: "DELETE", url: `/api/terminals/${terminalId}`, headers, payload: {} })).statusCode).toBe(404);
+      await server.app.inject({ method: "POST", url: "/api/projects/switch", headers, payload: { projectId: firstId } });
+      expect((await server.app.inject({ method: "PATCH", url: `/api/terminals/${terminalId}`, headers, payload: { title: "Renamed" } })).json().title).toBe("Renamed");
+      expect((await server.app.inject({ method: "GET", url: "/api/terminals", headers })).json()).toEqual([expect.objectContaining({ id: terminalId, title: "Renamed" })]);
+      expect(other.json().activeProjectId).not.toBe(firstId);
+    });
   });
 
   it("writes activeRootPath when switching projects", async () => {
