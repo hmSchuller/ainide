@@ -3,6 +3,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import type { EditorTab, EditorPaneId, EditorPaneState } from "../types";
 import { isDirty, useAppStore } from "../store";
 import type { CodeSelection } from "../references";
+import { configureMonacoLanguageSurface } from "../monaco-language-surface";
 
 interface EditorProps {
   onSave: (tab: EditorTab) => void;
@@ -247,7 +248,7 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
             <>
                <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions"><button onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button></span></div>
               {compare && active.conflict?.externalContent !== undefined && <div className="compare-panel"><div><label>YOUR BUFFER</label><pre>{active.content}</pre></div><div><label>ON DISK</label><pre>{active.conflict.externalContent}</pre></div></div>}
-              <Editor key={active.path} path={active.path} theme="vs-dark" language={active.language} value={active.content} saveViewState onMount={mount} onChange={(value) => onContentChange(active.path, value ?? "")} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", padding: { top: 10 }, scrollBeyondLastLine: false, renderWhitespace: "selection", smoothScrolling: true }} />
+               <Editor key={active.path} path={active.path} theme="vs-dark" language={active.language} value={active.content} saveViewState beforeMount={configureMonacoLanguageSurface} onMount={mount} onChange={(value) => onContentChange(active.path, value ?? "")} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", padding: { top: 10 }, scrollBeyondLastLine: false, renderWhitespace: "selection", smoothScrolling: true }} />
             </>
           )}
         </div>
