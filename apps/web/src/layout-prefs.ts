@@ -1,3 +1,5 @@
+import type { AppMode } from "./types";
+
 export const TERMINAL_COLLAPSED_KEY = "ainide:terminal-collapsed";
 
 export function readTerminalCollapsedPreference(storage: Pick<Storage, "getItem"> = localStorage): boolean {
@@ -15,6 +17,6 @@ export function shouldShowReferenceDock(itemCount: number): boolean {
   return itemCount > 0;
 }
 
-export function terminalPanelVisible(mode: "edit" | "agents" | "review"): boolean {
-  return mode !== "agents";
+export function terminalPanelVisible(mode: AppMode): boolean {
+  return mode === "edit";
 }

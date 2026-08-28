@@ -73,4 +73,16 @@ describe("project UI bags", () => {
     expect(snapshot.agentSessions).toEqual([{ title: "Implement" }, { title: "Plan next task" }]);
     expect(snapshot.terminalKinds).toEqual(["shell"]);
   });
+
+  it("restores LazyGit mode and records same-kind sessions without replacing them", () => {
+    const bag = emptyProjectBag();
+    bag.mode = "lazygit";
+    bag.terminals = [
+      { id: "lazy", title: "Lazygit", command: "ignored", cwd: "/proj-a", alive: true, kind: "lazygit", projectId: "/proj-a" },
+      { id: "shell", title: "Shell", command: "sh", cwd: "/proj-a", alive: true, kind: "shell", projectId: "/proj-a" },
+    ];
+    const snapshot = snapshotFromBag({ rootPath: "/proj-a", name: "a" }, captureProjectBag(bag));
+    expect(snapshot.mode).toBe("lazygit");
+    expect(snapshot.terminalKinds).toEqual(["lazygit", "shell"]);
+  });
 });

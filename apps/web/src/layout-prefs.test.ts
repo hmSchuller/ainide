@@ -33,9 +33,10 @@ describe("layout preferences", () => {
     expect(shouldShowReferenceDock(0)).toBe(false);
   });
 
-  it("hides the terminal panel in Agents mode", () => {
+  it("shows the utility terminal panel only in Edit mode", () => {
     expect(terminalPanelVisible("edit")).toBe(true);
-    expect(terminalPanelVisible("review")).toBe(true);
+    expect(terminalPanelVisible("review")).toBe(false);
     expect(terminalPanelVisible("agents")).toBe(false);
+    expect(terminalPanelVisible("lazygit")).toBe(false);
   });
 });

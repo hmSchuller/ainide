@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { parseAgentSessionDescriptors, type ProjectSessionSnapshot, type SessionSnapshot, type TerminalKind } from "@ainide/shared";
+import { parseAgentSessionDescriptors, parseAppMode, type ProjectSessionSnapshot, type SessionSnapshot, type TerminalKind } from "@ainide/shared";
 import { sessionsFilePath } from "./config.js";
 
 const SESSION_VERSION = 1;
@@ -53,7 +53,7 @@ export function sanitizeSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
         },
         secondaryOpen: project.secondaryOpen,
         expandedPaths: [...project.expandedPaths],
-        mode: project.mode === "agents" ? "agents" : project.mode === "review" ? "review" : "edit",
+        mode: parseAppMode(project.mode),
         terminalKinds: project.terminalKinds.filter((kind) => TERMINAL_KINDS.has(kind)),
         ...(agentSessions ? { agentSessions } : {}),
       };
@@ -77,7 +77,7 @@ function parseProjectSnapshot(value: unknown): ProjectSessionSnapshot | undefine
     panes,
     secondaryOpen: record.secondaryOpen === true,
     expandedPaths: stringArray(record.expandedPaths),
-    mode: record.mode === "agents" ? "agents" : record.mode === "review" ? "review" : "edit",
+    mode: parseAppMode(record.mode),
     terminalKinds,
     ...(agentSessions ? { agentSessions } : {}),
   };

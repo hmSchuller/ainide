@@ -113,6 +113,26 @@ describe("project HTTP API", () => {
       expect(server.terminals.list(server.projects.activeId).some((session) => session.kind === "shell")).toBe(true);
     }, sessionsPath);
 
+    const lazygitSessionsPath = path.join(dir, "lazygit-restore.json");
+    await saveSessionSnapshot({
+      version: 1,
+      activeRootPath: root,
+      projects: [{
+        rootPath: root,
+        name: "lazygit-restored",
+        openFilePaths: [],
+        panes: { primary: { tabPaths: [] }, secondary: { tabPaths: [] } },
+        secondaryOpen: false,
+        expandedPaths: [],
+        mode: "lazygit",
+        terminalKinds: ["lazygit"],
+      }],
+    }, lazygitSessionsPath);
+    await withServer(async (server) => {
+      expect(server.projects.snapshotFor(server.projects.activeId!)?.mode).toBe("lazygit");
+      expect(server.terminals.list(server.projects.activeId).some((session) => session.kind === "lazygit" || session.kind === "shell")).toBe(true);
+    }, lazygitSessionsPath);
+
     const missingPath = path.join(dir, "gone-project");
     const missingSessions = path.join(dir, "missing.json");
     await saveSessionSnapshot({

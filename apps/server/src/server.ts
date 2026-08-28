@@ -69,7 +69,7 @@ function snapshotPatchFrom(value: unknown): Partial<ProjectSessionSnapshot> | un
   if (record.panes && typeof record.panes === "object") patch.panes = record.panes as ProjectSessionSnapshot["panes"];
   if (typeof record.secondaryOpen === "boolean") patch.secondaryOpen = record.secondaryOpen;
   if (Array.isArray(record.expandedPaths)) patch.expandedPaths = record.expandedPaths.filter((item): item is string => typeof item === "string");
-  if (record.mode === "edit" || record.mode === "agents" || record.mode === "review") patch.mode = record.mode;
+  if (record.mode === "edit" || record.mode === "review" || record.mode === "agents" || record.mode === "lazygit") patch.mode = record.mode;
   if (Array.isArray(record.terminalKinds)) {
     patch.terminalKinds = record.terminalKinds.filter((item): item is ProjectSessionSnapshot["terminalKinds"][number] =>
       item === "agent" || item === "shell" || item === "lazygit" || item === "custom");

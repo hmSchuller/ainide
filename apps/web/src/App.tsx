@@ -8,6 +8,7 @@ import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ReviewSurface } from "./components/ReviewSurface";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AgentWorkbench } from "./components/AgentWorkbench";
+import { LazyGitSurface } from "./components/LazyGitSurface";
 import { ReferenceDock } from "./components/ReferenceDock";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, knownProjectSeed, snapshotFromBag } from "./project-ui";
@@ -19,6 +20,8 @@ import { captureFileReference, captureSelectionReference, captureTextFileReferen
 import { copyTextToClipboard } from "./clipboard";
 import { basenameFromPath, joinWorkspacePath, renameEntryPath } from "./explorer-actions";
 import { shouldShowReferenceDock, terminalPanelVisible } from "./layout-prefs";
+import { PRIMARY_MODE_LABELS, PRIMARY_MODES } from "./navigation";
+import { lazygitTerminals, shouldStartLazygitSession } from "./terminal-ownership";
 
 type PaletteAction = { label: string; shortcut?: string; run: () => void };
 
@@ -113,11 +116,11 @@ export default function App() {
         existing.push(created);
         if (kind === "lazygit") setTerminalError(undefined);
       } catch (error) {
-        if (kind === "lazygit") setTerminalError("Lazygit is unavailable. Install it or use the Shell terminal.");
+        if (kind === "lazygit") setTerminalError("Lazygit is unavailable. Install lazygit to use LazyGit mode.");
         else setNotice(`${kind} terminal could not be started`, "error");
       }
     }
-    if (existing.some((terminal) => terminal.kind === "lazygit" && !terminal.alive)) setTerminalError("Lazygit exited: install Lazygit to use the review terminal.");
+    if (existing.some((terminal) => terminal.kind === "lazygit" && !terminal.alive)) setTerminalError("Lazygit exited. Restart from LazyGit mode or close the session.");
     setTerminals(existing);
   };
 
@@ -386,13 +389,27 @@ export default function App() {
     }
   };
 
+  const switchToLazyGit = async () => {
+    setMode("lazygit");
+    if (!token) return;
+    const state = useAppStore.getState();
+    const existing = lazygitTerminals(state.terminals, state.activeProjectId);
+    if (!shouldStartLazygitSession(existing)) return;
+    try {
+      const created = await createTerminal("lazygit", token);
+      addTerminal(created);
+      setTerminalError(undefined);
+    } catch {
+      setTerminalError("Lazygit is unavailable. Install lazygit to use LazyGit mode.");
+    }
+  };
+
   const newTerminal = async (kind: TerminalSession["kind"] = "custom", title?: string) => {
     if (!token) return;
     try {
       const created = await createTerminal(kind, token, title);
       addTerminal(created);
       if (kind === "agent") useAppStore.getState().setFocusedSession(created.id);
-      if (kind === "lazygit") setTerminalError(undefined);
     }
     catch (error) { setNotice(error instanceof Error ? error.message : "Terminal could not be started", "error"); }
   };
@@ -525,10 +542,10 @@ export default function App() {
     { label: "New Terminal", run: () => { setPaletteOpen(false); void newTerminal(); } },
      { label: "Open Agent", run: () => { setPaletteOpen(false); newAgent(); } },
     { label: "Open Shell", run: () => { setPaletteOpen(false); void newTerminal("shell"); } },
-    { label: "Open Lazygit", run: () => { setPaletteOpen(false); void newTerminal("lazygit"); } },
-     { label: "Switch to Edit mode", shortcut: "⌘ 1", run: () => { setMode("edit"); setPaletteOpen(false); } },
-     { label: "Switch to Review mode", shortcut: "⌘ 2", run: () => { setPaletteOpen(false); void switchToReview(); } },
-     { label: "Switch to Agents mode", shortcut: "⌘ 3", run: () => { setMode("agents"); setPaletteOpen(false); } },
+    { label: "Switch to Edit mode", run: () => { setMode("edit"); setPaletteOpen(false); } },
+    { label: "Switch to Review mode", run: () => { setPaletteOpen(false); void switchToReview(); } },
+    { label: "Switch to Agents mode", run: () => { setMode("agents"); setPaletteOpen(false); } },
+    { label: "Switch to LazyGit mode", run: () => { setPaletteOpen(false); void switchToLazyGit(); } },
      { label: "Save", shortcut: "⌘ S", run: () => { const activePath = panes[focusedPaneId].activePath; const tab = tabs.find((item) => item.path === activePath); if (tab) void saveFile(tab); setPaletteOpen(false); } },
     { label: "Refresh Git and files", run: () => { setPaletteOpen(false); void refresh(); } },
      { label: "Restart Review", run: () => { setPaletteOpen(false); void switchToReview(true); } },
@@ -547,9 +564,6 @@ export default function App() {
          setTerminalCollapsed(next);
          useAppStore.setState({ terminalMaximized: false });
        }
-       else if (event.key === "1") setMode("edit");
-       else if (event.key === "2") void switchToReview();
-       else if (event.key === "3") setMode("agents");
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
@@ -584,7 +598,16 @@ export default function App() {
         onOpenAnother={() => setAddingProject(true)}
         onClose={() => void closeActiveProject().catch((error) => setNotice(error instanceof Error ? error.message : "Could not close project", "error"))}
       />
-        <div className="mode-switch" role="tablist"><button className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")}>Edit <kbd>⌘1</kbd></button><button className={mode === "agents" ? "active" : ""} onClick={() => setMode("agents")}>Agents <span className="mode-count">{terminals.filter((terminal) => terminal.kind === "agent" && terminal.alive).length}</span><kbd>⌘3</kbd></button><button className={mode === "review" ? "active" : ""} onClick={() => void switchToReview()}>Review <kbd>⌘2</kbd></button></div>
+        <div className="mode-switch" role="tablist">{PRIMARY_MODES.map((entry) => {
+          const label = PRIMARY_MODE_LABELS[entry];
+          const active = mode === entry;
+          const onClick = () => {
+            if (entry === "review") void switchToReview();
+            else if (entry === "lazygit") void switchToLazyGit();
+            else setMode(entry);
+          };
+          return <button key={entry} className={active ? "active" : ""} role="tab" aria-selected={active} onClick={onClick}>{label}{entry === "agents" && <span className="mode-count">{terminals.filter((terminal) => terminal.kind === "agent" && terminal.alive).length}</span>}</button>;
+        })}</div>
         <div className="top-actions"><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
     <div className="workbench">
@@ -617,15 +640,16 @@ export default function App() {
              />
              {shouldShowReferenceDock(referenceKit.length) && <ReferenceDock />}
            </div>
-           <div className="mode-surface" hidden={mode !== "agents"}><AgentWorkbench onNewAgent={newAgent} onNewTool={(kind) => void newTerminal(kind)} onOpenReference={openReference} /></div>
+           <div className="mode-surface" hidden={mode !== "agents"}><AgentWorkbench onNewAgent={newAgent} onOpenReference={openReference} /></div>
            <div className="mode-surface" hidden={mode !== "review"}>
             <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />
           </div>
+           <div className="mode-surface" hidden={mode !== "lazygit"}><LazyGitSurface onOpenReference={openReference} /></div>
          {terminalPanelVisible(mode) && <TerminalPanel onNewTerminal={(kind) => void newTerminal(kind)} onOpenReference={openReference} />}
       </main>
     </div>
     <div className="notices">{notices.map((notice) => <button className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)}>{notice.text}<span>×</span></button>)}</div>
-    {terminalError && <div className="terminal-error-toast"><b>Terminal note</b> {terminalError}</div>}
+    {terminalError && mode !== "lazygit" && <div className="terminal-error-toast"><b>Terminal note</b> {terminalError}</div>}
     {addingProject && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddingProject(false); }}>
       <WorkspacePicker initialPath="" knownProjects={knownProjects.filter((project) => project.projectId !== activeProjectId)} busy={pickerBusy} error={pickerError} onOpen={(path) => {
         setPickerBusy(true); setPickerError(undefined);

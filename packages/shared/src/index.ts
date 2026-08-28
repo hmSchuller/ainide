@@ -116,7 +116,14 @@ export interface SessionBootstrap {
   restoreError?: string;
 }
 
-export type AppMode = "edit" | "agents" | "review";
+export type AppMode = "edit" | "review" | "agents" | "lazygit";
+
+export const APP_MODES: readonly AppMode[] = ["edit", "review", "agents", "lazygit"];
+
+export function parseAppMode(value: unknown): AppMode {
+  if (value === "review" || value === "agents" || value === "lazygit") return value;
+  return "edit";
+}
 
 export interface ReviewStatus {
   running: boolean;

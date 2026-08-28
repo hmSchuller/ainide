@@ -2,9 +2,9 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ProjectSessionSnapshot } from "@ainide/shared";
+import { parseAppMode, type ProjectSessionSnapshot } from "@ainide/shared";
 import { emptyProjectSnapshot } from "./projects.js";
-import { loadSessionSnapshot, parseSessionSnapshot, saveSessionSnapshot } from "./sessions.js";
+import { loadSessionSnapshot, parseSessionSnapshot, sanitizeSnapshot, saveSessionSnapshot } from "./sessions.js";
 
 describe("session snapshots", () => {
   it("round-trips paths and layout without contents or token", async () => {
@@ -82,5 +82,46 @@ describe("session snapshots", () => {
       expect(raw).not.toContain(forbidden);
     }
     expect(JSON.parse(raw).projects[0].agentSessions).toEqual([{ title: "Implement" }]);
+  });
+
+  it("round-trips all primary modes and falls back unknown modes to Edit", () => {
+    const base = {
+      rootPath: "/tmp/demo-project",
+      name: "demo-project",
+      openFilePaths: [],
+      panes: { primary: { tabPaths: [] }, secondary: { tabPaths: [] } },
+      secondaryOpen: false,
+      expandedPaths: [],
+      terminalKinds: ["shell" as const],
+    };
+    for (const mode of ["edit", "review", "agents", "lazygit"] as const) {
+      const parsed = parseSessionSnapshot({ version: 1, projects: [{ ...base, mode }] })?.projects[0];
+      expect(parsed?.mode).toBe(mode);
+    }
+    expect(parseSessionSnapshot({ version: 1, projects: [{ ...base, mode: "unknown" }] })?.projects[0].mode).toBe("edit");
+    expect(parseAppMode("unknown")).toBe("edit");
+  });
+
+  it("sanitizes LazyGit mode without persisting forbidden session data", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-lazygit-mode-"));
+    const filePath = path.join(dir, "sessions.json");
+    const project = {
+      ...emptyProjectSnapshot({ rootPath: "/tmp/demo-project", name: "demo-project" }),
+      mode: "lazygit" as const,
+      terminalKinds: ["lazygit" as const],
+      token: "secret-token",
+      ptyId: "pty-secret",
+      scrollback: "output",
+      command: "lazygit",
+    } as unknown as ProjectSessionSnapshot;
+    const sanitized = sanitizeSnapshot({ version: 1, projects: [project] });
+    expect(sanitized.projects[0]?.mode).toBe("lazygit");
+    await saveSessionSnapshot({ version: 1, projects: [project] }, filePath);
+    const raw = await readFile(filePath, "utf8");
+    for (const forbidden of ["secret-token", "pty-secret", "scrollback", "secret command"]) {
+      expect(raw).not.toContain(forbidden);
+    }
+    expect(raw).toContain('"mode": "lazygit"');
+    expect(await loadSessionSnapshot(filePath)).toEqual(sanitizeSnapshot({ version: 1, projects: [project] }));
   });
 });

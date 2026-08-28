@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import type { TerminalSession } from "@ainide/shared";
 import { closeTerminal, renameTerminal, websocketUrl } from "../api";
+import { utilityTerminals } from "../terminal-ownership";
 import { persistLayout, useAppStore } from "../store";
 
 interface TerminalPanelProps {
@@ -56,7 +57,7 @@ export function TerminalView({ session, onOpenReference }: { session: TerminalSe
          if (message.type === "exit") {
           updateTerminal(session.id, { alive: false });
           terminal.write(`\r\n\x1b[90m[process exited${message.exitCode == null ? "" : ` with ${message.exitCode}`} ]\x1b[0m\r\n`);
-          setError(session.kind === "lazygit" ? "Lazygit is not available in this workspace." : undefined);
+          setError(undefined);
         }
       } catch {
         terminal.write(String(event.data));
@@ -116,10 +117,9 @@ export function TerminalView({ session, onOpenReference }: { session: TerminalSe
 export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelProps) {
   const allTerminals = useAppStore((state) => state.terminals);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
-  const terminals = allTerminals.filter((terminal) => terminal.projectId === activeProjectId && terminal.kind !== "agent");
+  const terminals = utilityTerminals(allTerminals, activeProjectId);
   const token = useAppStore((state) => state.token);
   const activeTerminalId = useAppStore((state) => state.activeTerminalId);
-  const terminalError = useAppStore((state) => state.terminalError);
   const activeHeight = useAppStore((state) => state.terminalHeight);
   const collapsed = useAppStore((state) => state.terminalCollapsed);
   const maximized = useAppStore((state) => state.terminalMaximized);
@@ -166,8 +166,7 @@ export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelP
       </div>
     </header>
     {!collapsed && <div className="terminal-body">
-       {terminalError && (!selectedTerminalId || terminals.find((terminal) => terminal.id === selectedTerminalId)?.kind === "lazygit") && <div className="terminal-error-state"><b>{terminalError}</b><span>Open Shell from the command palette to continue.</span></div>}
-       {terminals.length === 0 ? <div className="terminal-empty">No terminal sessions. Use <button onClick={() => onNewTerminal("shell")}>+ Shell</button> to start one.</div> : terminals.map((terminal) => <div className={`terminal-instance ${terminal.id === selectedTerminalId ? "visible" : "hidden"}`} key={terminal.id}><TerminalView session={terminal} onOpenReference={onOpenReference} /><button className="terminal-close" onClick={() => void close(terminal)} title="Close terminal">×</button></div>)}
+       {terminals.length === 0 ? <div className="terminal-empty">No utility terminals. Use <button onClick={() => onNewTerminal("shell")}>+ Shell</button> to start one.</div> : terminals.map((terminal) => <div className={`terminal-instance ${terminal.id === selectedTerminalId ? "visible" : "hidden"}`} key={terminal.id}><TerminalView session={terminal} onOpenReference={onOpenReference} /><button className="terminal-close" onClick={() => void close(terminal)} title="Close terminal">×</button></div>)}
     </div>}
   </section>;
 }

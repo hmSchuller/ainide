@@ -10,8 +10,10 @@ ainide is an early-stage `0.1.0` project intended for one local user. It runs co
 
 - **Edit**: Browse a workspace, open files in Monaco, use two editor panes, drag tabs between panes, and search file paths.
 - **Safe editing**: Text buffers auto-save after a short pause, manual save is available, and external changes are surfaced as conflicts instead of silently replacing dirty work.
+- **Review**: Launch an optional local Difit review for the working tree, staged changes, the last commit, or the current branch versus `main`.
 - **Agents**: Run multiple named agent sessions, focus one session, or pin a second session for side-by-side observation.
-- **Terminals**: Use real shell, configured agent, Lazygit, and custom PTY sessions through xterm.js.
+- **LazyGit**: Open a dedicated full-height Lazygit surface for interactive Git work in the active project.
+- **Edit utilities**: Use real shell and custom PTY sessions from Edit mode through xterm.js.
 - **Reference kit**: Capture a selection or whole file, copy it as plain text with path and line provenance, or explicitly insert it into a selected live agent without submitting it.
 - **Projects**: Keep several local projects open in one ainide process and switch between them without killing their PTY sessions.
 - **Git status**: See changed files, branch information, and insertion/deletion counts in the explorer and top bar.
@@ -58,7 +60,7 @@ ainide detects these commands on the local `PATH`:
 | --- | --- | --- |
 | `git` | Git status and repository metadata | No |
 | `difit` | Review mode and embedded diffs | No |
-| `lazygit` | Lazygit utility terminal | No |
+| `lazygit` | LazyGit mode and interactive Git terminal | No |
 | Your agent CLI | Agent PTY sessions | No |
 
 The configured agent is not supplied by ainide. Any locally installed command can be used, including a command with arguments. Review mode requires both a Git repository and the `difit` CLI. The `branch vs main` scope additionally requires a local `main` branch.
@@ -69,15 +71,27 @@ The configured agent is not supplied by ainide. Any locally installed command ca
 
 Start by entering an absolute workspace path. Use the project switcher in the top bar to open another project, switch between open projects, or close a project. Only one project is visible at a time, but PTYs for other open projects continue running until the project is closed or the ainide process exits.
 
+### Primary modes
+
+Use the top-bar tabs or command palette to switch among **Edit**, **Review**, **Agents**, and **LazyGit**. ainide does not register direct numeric shortcuts for mode changes.
+
 ### Edit files
 
 Open files from the workspace explorer or use `Cmd/Ctrl+P` to search file paths. Normal clicks open files in the primary pane; Shift-click opens a file in the secondary pane. Text changes auto-save after a short debounce. If a file changes on disk while its buffer is dirty, ainide shows the on-disk version and lets you reload, keep your buffer, or compare the two versions. Binary files are detected but are not editable as text.
 
-### Run agents and tools
+### Run agents
 
-Use **Agents** mode to create and name multiple agent sessions. Each session is a real PTY started in the active workspace using the configured agent command. Shell, Lazygit, and custom sessions remain available as utility tools. Switching modes or projects does not intentionally terminate live PTYs.
+Use **Agents** mode to create and name multiple agent sessions. Each session is a real PTY started in the active workspace using the configured agent command. Switching modes or projects does not intentionally terminate live PTYs.
 
 The editor and explorer can add files or selected lines to the reference kit. Choose a live agent as the target, then use **Paste reference kit** to insert the captured context into its terminal. Insertion is explicit, sends no trailing newline, and does not submit the agent prompt. **Copy kit** remains available as a clipboard fallback.
+
+### Edit utilities
+
+Shell and custom utility terminals are available only from **Edit** mode. Use the utility terminal footer or command palette to start them. Review mode stays focused on Difit, and Lazygit lives in its own primary mode.
+
+### LazyGit
+
+Open **LazyGit** mode to work with the active project's Lazygit session in a full-height surface. ainide reuses an existing Lazygit PTY when you return to the mode and reports clear unavailable or exited states when the optional tool is missing or stops.
 
 ### Review Git changes
 
@@ -88,7 +102,7 @@ Open **Review** mode and choose one of these scopes:
 - Last commit (`HEAD~1` compared with `HEAD`)
 - Branch versus `main`
 
-ainide starts Difit as a local child process and embeds its ready URL. A running review is reused when switching between Edit and Review; changing projects or closing the project stops the review process.
+ainide starts Difit as a local child process and embeds its ready URL. A running review is reused when switching between Edit and Review; changing projects or closing the project stops the review process. Review mode does not render the Edit utility terminal footer.
 
 ## Configuration
 
@@ -150,7 +164,7 @@ npm test            # Run server and frontend tests
 
 - **The workspace will not open**: ainide requires an existing directory and the path must be absolute.
 - **Review is unavailable**: Confirm the workspace is a Git repository and that `difit` is installed and available on `PATH`. The branch-vs-main scope needs a local `main` branch.
-- **Lazygit will not start**: Install `lazygit`, or use the Shell terminal instead.
+- **Lazygit will not start**: Install `lazygit`, then open LazyGit mode or retry from the unavailable state. Shell utilities remain available from Edit mode.
 - **The agent terminal is empty or unavailable**: Confirm the configured agent command is installed and executable from the server's environment.
 - **A project did not restore**: Session restoration is best effort. Missing directories or unavailable optional tools are reported while known projects remain available in the picker.
 - **Search does not find code text**: File search currently matches names and paths; it does not search file contents.
