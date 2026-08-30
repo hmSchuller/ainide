@@ -22,7 +22,7 @@ npm test
 npm run build
 ```
 
-The backend defaults to `127.0.0.1:3000`. The Vite frontend proxies API and WebSocket traffic to it.
+The backend defaults to `127.0.0.1:43127`. The Vite frontend proxies API and WebSocket traffic to it; a `PORT` override is shared by both processes during development.
 
 ## Implementation Rules
 

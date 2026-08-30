@@ -41,7 +41,7 @@ npm run dev
 
 Open the Vite URL printed in the terminal and enter the absolute path to an existing workspace directory, for example `/Users/you/src/project`.
 
-The development server runs the React/Vite frontend and Fastify backend together. The backend listens on `127.0.0.1:3000` by default, and Vite proxies API and WebSocket traffic to it.
+The development server runs the React/Vite frontend and Fastify backend together. The backend listens on `127.0.0.1:43127` by default, and Vite proxies API and WebSocket traffic to it. Set `PORT` to use another available backend port; the development proxy follows the same value.
 
 ### Build and serve locally
 
@@ -50,7 +50,7 @@ npm run build
 npm run start -w @ainide/server
 ```
 
-After building, the backend serves the compiled frontend when `apps/web/dist` is available. Open `http://127.0.0.1:3000` unless you configure another host or port.
+After building, the backend serves the compiled frontend when `apps/web/dist` is available. Open `http://127.0.0.1:43127` unless you configure another host or port.
 
 ## Optional local tools
 
@@ -128,7 +128,7 @@ Set `AINIDE_CONFIG` to use another path. Example:
 | `AGENT_COMMAND` | Overrides `agentCommand` | The configured command, or the default shell |
 | `DEFAULT_SHELL` | Overrides `defaultShell` | `$SHELL`, or `/bin/sh` |
 | `HOST` | Backend bind address | `127.0.0.1` |
-| `PORT` | Backend listen port | `3000` |
+| `PORT` | Backend listen port and development proxy target | `43127` |
 
 Keep `HOST` set to `127.0.0.1` unless you deliberately want to expose ainide beyond the local machine. ainide has no user accounts or remote authentication; the process-local session token is regenerated on every server start and is not persisted.
 

@@ -1,10 +1,11 @@
 import { createServer } from "./server.js";
+import { resolveBackendPort } from "@ainide/shared";
 
 const server = await createServer();
-const port = Number.parseInt(process.env.PORT || "3000", 10);
+const port = resolveBackendPort(process.env.PORT);
 const host = process.env.HOST || "127.0.0.1";
 
-await server.app.listen({ port: Number.isFinite(port) ? port : 3000, host });
+await server.app.listen({ port, host });
 
 const shutdown = async () => {
   await server.close();

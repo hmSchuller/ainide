@@ -150,6 +150,8 @@ export interface FileCreateRequest {
 
 export const DEFAULT_TERMINAL_KINDS: TerminalKind[] = ["agent", "shell", "lazygit"];
 
+export { DEFAULT_BACKEND_PORT, resolveBackendPort } from "./port.js";
+
 export function missingTerminalKinds(
   sessions: Array<{ kind: TerminalKind; alive: boolean }>,
   wanted: TerminalKind[] = DEFAULT_TERMINAL_KINDS,
