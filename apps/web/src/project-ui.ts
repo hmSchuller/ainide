@@ -117,6 +117,7 @@ export function snapshotFromBag(workspace: Workspace, bag: ProjectUiBag): Projec
   const acpSessions = bag.acpSessions.flatMap((session) => session.acpSessionId ? [{
     id: session.id,
     title: session.title,
+    titleSource: session.titleSource,
     providerId: session.providerId,
     acpSessionId: session.acpSessionId,
     resumability: session.resumability === "resumable" || session.resumability === "restored" ? "resumable" as const : "non_resumable" as const,

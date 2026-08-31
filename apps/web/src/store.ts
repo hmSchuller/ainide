@@ -217,8 +217,13 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   addAcpSession: (session) => set((current) => {
     if (current.activeProjectId && session.projectId !== current.activeProjectId) return current;
-    if (current.acpSessions.some((candidate) => candidate.id === session.id)) return current;
-    return { acpSessions: [...current.acpSessions, session] };
+    const index = current.acpSessions.findIndex((candidate) => candidate.id === session.id);
+    if (index < 0) return { acpSessions: [...current.acpSessions, session] };
+    const existing = current.acpSessions[index];
+    if (!existing) return current;
+    const acpSessions = [...current.acpSessions];
+    acpSessions[index] = { ...session, ...existing };
+    return { acpSessions };
   }),
   updateAcpSession: (id, update) => set((current) => ({ acpSessions: current.acpSessions.map((session) => session.id === id ? { ...session, ...update } : session) })),
   applyAcpEvent: (event) => set((current) => {

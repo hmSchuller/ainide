@@ -11,6 +11,7 @@ function session(projectId: string): AcpSession {
   return {
     id: "acp-session",
     title: "ACP",
+    titleSource: "user",
     projectId,
     providerId: "fake",
     providerLabel: "Fake",

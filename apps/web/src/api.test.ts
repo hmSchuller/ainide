@@ -16,10 +16,12 @@ describe("ACP web API", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getAcpProviders("token-1")).resolves.toEqual([{ id: "fake", label: "Fake" }]);
-    await createAcpSession("fake", "Work", "token-1");
+    await createAcpSession("fake", "token-1");
     await promptAcpSession("session-1", { text: "Hello", context: [{ path: "src/a.ts", content: "code", startLine: 2, endLine: 2 }] }, "token-1");
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
+    const [, createInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(String(createInit.body))).toEqual({ providerId: "fake" });
     const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(url).toContain("/api/acp/sessions/session-1/prompt");
     expect((init.headers as Record<string, string>)["x-session-token"]).toBe("token-1");

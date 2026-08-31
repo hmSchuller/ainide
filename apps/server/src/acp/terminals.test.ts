@@ -9,6 +9,7 @@ function session(id: string, rootPath: string): AcpSession {
   return {
     id,
     title: id,
+    titleSource: "user",
     projectId: rootPath,
     providerId: "test",
     providerLabel: "Test",

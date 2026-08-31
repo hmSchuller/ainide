@@ -22,8 +22,8 @@ function fakeProviderScript(): string {
     "  else if (message.method === 'session/new') {",
     "    if (mode === 'stderr') fail(message.id, -32001, 'API_KEY=' + process.env.API_KEY);",
     "    else if (mode === 'auth' && !process.env.ACP_AUTHENTICATED) fail(message.id, -32000, 'Authentication required');",
-    "    else { process.env.ACP_AUTHENTICATED = 'true'; send(message.id, { sessionId: 'provider-session-1', configOptions: optionsFor() }); if (mode === 'commands' || mode === 'commands-dynamic') setTimeout(() => commands('provider-session-1', [{ name: 'plan', description: 'Create a plan', input: { hint: 'what to plan' } }, { name: 'skill', description: 'Run a skill' }]), 0); if (mode === 'commands-dynamic') { setTimeout(() => commands('provider-session-1', [{ name: 'review', description: 'Review changes' }]), 50); setTimeout(() => commands('provider-session-1', []), 100); } if (mode === 'exit') setTimeout(() => process.exit(7), 20); }",
-    "  } else if (message.method === 'session/load') send(message.id, { configOptions: optionsFor() });",
+     "    else { process.env.ACP_AUTHENTICATED = 'true'; send(message.id, { sessionId: 'provider-session-1', configOptions: optionsFor() }); if (mode === 'commands' || mode === 'commands-dynamic') setTimeout(() => commands('provider-session-1', [{ name: 'plan', description: 'Create a plan', input: { hint: 'what to plan' } }, { name: 'skill', description: 'Run a skill' }]), 0); if (mode === 'commands-dynamic') { setTimeout(() => commands('provider-session-1', [{ name: 'review', description: 'Review changes' }]), 50); setTimeout(() => commands('provider-session-1', []), 100); } if (mode === 'title') { const titleUpdate = (title) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'provider-session-1', update: { sessionUpdate: 'session_info_update', title } } }) + '\\n'); setTimeout(() => titleUpdate('Generated title'), 0); setTimeout(() => titleUpdate('Provider follow-up'), 100); } if (mode === 'exit') setTimeout(() => process.exit(7), 20); }",
+     "  } else if (message.method === 'session/load') { send(message.id, { configOptions: optionsFor() }); if (mode === 'title') setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'provider-session-1', update: { sessionUpdate: 'session_info_update', title: 'Provider restored' } } }) + '\\n'), 0); }",
     "  else if (message.method === 'session/set_config_option') { if (mode === 'reject-config') fail(message.id, -32001, 'Configuration rejected'); else send(message.id, { configOptions: optionsFor(message.params.configId, message.params.value) }); }",
     "  else if (message.method === 'session/close') send(message.id, {});",
     "  else if (message.method === 'session/cancel') { if (mode !== 'close-pending') send(activePromptId, { stopReason: 'cancelled' }); }",
@@ -146,6 +146,39 @@ describe("ACP session manager", () => {
     await sessions.close();
   });
 
+  it("starts without a title and accepts provider title updates until the user renames it", async () => {
+    const events: AcpServerEvent[] = [];
+    const sessions = manager("title", (event) => events.push(event));
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake" });
+
+    expect(session).toMatchObject({ title: "Fake provider", titleSource: "provider" });
+    await waitFor(() => sessions.get(session.id)?.title === "Generated title");
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session_event", event: expect.objectContaining({ type: "status", session: expect.objectContaining({ title: "Generated title", titleSource: "provider" }) }) })]));
+    expect(sessions.descriptors("project-1")[0]).toMatchObject({ title: "Generated title", titleSource: "provider" });
+
+    expect(sessions.rename(session.id, "My session")).toMatchObject({ title: "My session", titleSource: "user" });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(sessions.get(session.id)).toMatchObject({ title: "My session", titleSource: "user" });
+    await sessions.close();
+  });
+
+  it("preserves user-owned titles when restoring a provider session that advertises a new title", async () => {
+    const sessions = manager("title", () => undefined);
+    const restored = await sessions.restore("project-1", process.cwd(), [{
+      id: "user-owned-session",
+      title: "My renamed session",
+      titleSource: "user",
+      providerId: "fake",
+      acpSessionId: "provider-session-1",
+      resumability: "resumable",
+    }]);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(restored[0]).toMatchObject({ title: "My renamed session", titleSource: "user" });
+    expect(sessions.get("user-owned-session")).toMatchObject({ title: "My renamed session", titleSource: "user" });
+    await sessions.close();
+  });
+
   it("remembers successful configuration changes per provider", async () => {
     const sessions = managerWithProviders([
       { id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "prompt" } },
@@ -229,7 +262,8 @@ describe("ACP session manager", () => {
     const sessions = manager("restore", () => undefined, undefined, [{ providerId: "fake", values: { thinking: false } }]);
     const restored = await sessions.restore("project-1", process.cwd(), [{
       id: "local-session-1",
-      title: "Restored session",
+       title: "Restored session",
+       titleSource: "user",
       providerId: "fake",
       acpSessionId: "provider-session-1",
       resumability: "resumable",
@@ -308,7 +342,8 @@ describe("ACP session manager", () => {
     const sessions = manager("non-resumable", () => undefined);
     const restored = await sessions.restore("project-1", process.cwd(), [{
       id: "local-session-2",
-      title: "Old session",
+       title: "Old session",
+       titleSource: "user",
       providerId: "fake",
       acpSessionId: "provider-session-1",
       resumability: "resumable",
@@ -322,7 +357,8 @@ describe("ACP session manager", () => {
     const sessions = manager("bad-protocol", () => undefined);
     const restored = await sessions.restore("project-1", process.cwd(), [{
       id: "local-session-4",
-      title: "Explicitly new session required",
+       title: "Explicitly new session required",
+       titleSource: "user",
       providerId: "fake",
       acpSessionId: "provider-session-1",
       resumability: "non_resumable",
@@ -336,7 +372,8 @@ describe("ACP session manager", () => {
     const sessions = manager("restore", () => undefined);
     const restored = await sessions.restore("project-1", process.cwd(), [{
       id: "local-session-3",
-      title: "Missing provider session",
+       title: "Missing provider session",
+       titleSource: "user",
       providerId: "missing",
       acpSessionId: "provider-session-1",
       resumability: "resumable",

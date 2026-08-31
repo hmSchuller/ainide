@@ -94,6 +94,7 @@ describe("project UI bags", () => {
       projectId: "/proj-a",
       providerId: "cursor",
       providerLabel: "Cursor",
+      titleSource: "user",
       acpSessionId: "provider-1",
       authMethods: [],
       status: "live",
@@ -110,7 +111,7 @@ describe("project UI bags", () => {
     expect(captured.acpHistory["acp-1"]).toEqual([{ type: "message", id: "message-1", role: "agent", text: "history" }]);
     expect(captured.acpDrafts["acp-1"]?.references[0]?.startLine).toBe(2);
     const snapshot = snapshotFromBag({ rootPath: "/proj-a", name: "a" }, captured);
-    expect(snapshot.acpSessions).toEqual([{ id: "acp-1", title: "Implement", providerId: "cursor", acpSessionId: "provider-1", resumability: "resumable" }]);
+    expect(snapshot.acpSessions).toEqual([{ id: "acp-1", title: "Implement", titleSource: "user", providerId: "cursor", acpSessionId: "provider-1", resumability: "resumable" }]);
     expect(JSON.stringify(snapshot)).not.toContain("history");
     expect(JSON.stringify(snapshot)).not.toContain("draft");
   });

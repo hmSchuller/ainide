@@ -99,8 +99,19 @@ describe("ACP server API", () => {
     await server.close();
     servers.splice(servers.indexOf(server), 1);
     const saved = JSON.parse(await readFile(sessionsPath, "utf8")) as { projects: Array<{ acpSessions?: unknown[] }> };
-    expect(saved.projects[0]?.acpSessions).toEqual([expect.objectContaining({ title: "API session", providerId: "fake", acpSessionId: "server-provider-session" })]);
+    expect(saved.projects[0]?.acpSessions).toEqual([expect.objectContaining({ title: "API session", titleSource: "user", providerId: "fake", acpSessionId: "server-provider-session" })]);
     expect(JSON.stringify(saved)).not.toContain("availableCommands");
+  });
+
+  it("creates an ACP session without a title and uses the configured provider label", async () => {
+    const root = await project("ainide-acp-api-untitled-");
+    const { server } = await startServer();
+    const auth = headers(server.token);
+    await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth, payload: { path: root } });
+
+    const created = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake" } });
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toMatchObject({ title: "Fake ACP", titleSource: "provider" });
   });
 
   it("rejects malformed commands and inactive-project session access", async () => {

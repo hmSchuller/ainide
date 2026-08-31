@@ -6,6 +6,7 @@ function session(id = "session-1"): AcpSession {
   return {
     id,
     title: id,
+    titleSource: "user",
     projectId: "project-1",
     providerId: "fake",
     providerLabel: "Fake",

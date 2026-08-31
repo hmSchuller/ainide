@@ -53,12 +53,15 @@ export interface AgentSessionDescriptor {
   title: string;
 }
 
+export type AcpTitleSource = "provider" | "user";
+
 export interface AcpSessionDescriptor {
   id: string;
   title: string;
   providerId: string;
   acpSessionId: string;
   resumability: "resumable" | "non_resumable";
+  titleSource: AcpTitleSource;
 }
 
 export type AcpProviderPreferenceValue = string | boolean;
@@ -158,6 +161,7 @@ export type AcpPendingRequest =
 export interface AcpSession {
   id: string;
   title: string;
+  titleSource: AcpTitleSource;
   projectId: string;
   providerId: string;
   providerLabel: string;
@@ -356,7 +360,8 @@ export function parseAcpSessionDescriptors(value: unknown): AcpSessionDescriptor
     const acpSessionId = cleanDescriptorValue(record.acpSessionId);
     const resumability = record.resumability === "resumable" || record.resumability === "non_resumable" ? record.resumability : undefined;
     if (!id || !title || !providerId || !acpSessionId || !resumability) return [];
-    return [{ id, title, providerId, acpSessionId, resumability }];
+    const titleSource = record.titleSource === "provider" ? "provider" : "user";
+    return [{ id, title, providerId, acpSessionId, resumability, titleSource }];
   });
 }
 

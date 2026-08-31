@@ -36,6 +36,14 @@ describe("ACP normalization", () => {
     expect(result.activities).toEqual([{ type: "unknown", name: "future_update", data: { sessionUpdate: "future_update", reason: "diagnostic" } }]);
   });
 
+  it("keeps only bounded, non-empty session titles", () => {
+    expect(normalizeSessionUpdate({ sessionUpdate: "session_info_update", title: "  Generated title  " })).toEqual({ activities: [], title: "Generated title" });
+    for (const title of ["", "  ", null, 42, { value: "invalid" }]) {
+      expect(normalizeSessionUpdate({ sessionUpdate: "session_info_update", title } as unknown as acp.SessionUpdate)).toEqual({ activities: [] });
+    }
+    expect(normalizeSessionUpdate({ sessionUpdate: "session_info_update", title: "x".repeat(100) })).toEqual({ activities: [], title: "x".repeat(80) });
+  });
+
   it("normalizes available commands without retaining the provider update as activity", () => {
     const update = {
       sessionUpdate: "available_commands_update",

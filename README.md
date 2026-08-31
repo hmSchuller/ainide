@@ -65,7 +65,7 @@ ainide detects these commands on the local `PATH`:
 | Cursor `agent` | Cursor ACP sessions with `agent acp` | No |
 | OpenCode `opencode` | OpenCode ACP sessions with `opencode acp` | No |
 
-The configured PTY agent is not supplied by ainide. Any locally installed command can be used, including a command with arguments. ACP providers are configured as direct command and argument pairs; ainide does not install or proxy them through a shell. Review mode requires both a Git repository and the `difit` CLI. The `branch vs main` scope additionally requires a local `main` branch.
+The configured PTY agent is not supplied by ainide. Any locally installed command can be used, including a command with arguments. ACP providers are configured as direct command and argument pairs; ainide does not install or proxy them through a shell. Their configured labels are the entries shown in the new-agent picker, and changing the configuration requires restarting the server. Review mode requires both a Git repository and the `difit` CLI. The `branch vs main` scope additionally requires a local `main` branch.
 
 ## Using ainide
 
@@ -83,7 +83,9 @@ Open files from the workspace explorer or use `Cmd/Ctrl+P` to search file paths.
 
 ### Run agents
 
-Use **Agents** mode to create and name multiple agent sessions. PTY sessions are real terminals started in the active workspace using the configured agent command. ACP sessions use a configured local provider such as `agent acp` or `opencode acp` and expose structured conversation, tool activity, permissions, and provider-advertised configuration. Switching modes or projects does not intentionally terminate live sessions.
+Use **Agents** mode to create multiple agent sessions. The new-agent picker lists only configured ACP providers; selecting one starts it immediately, without a title prompt or a PTY fallback. PTY sessions remain real terminals started in the active workspace using the configured agent command. ACP sessions use a configured local provider such as `agent acp` or `opencode acp` and expose structured conversation, tool activity, permissions, and provider-advertised configuration. Switching modes or projects does not intentionally terminate live sessions.
+
+An ACP session initially uses the configured provider label as a provisional title. Providers may replace it later through ACP session metadata, while a title set with the existing rename action remains user-owned and is not overwritten by later provider updates.
 
 The editor and explorer can add files or selected lines to the reference kit. Choose a live agent as the target, then use **Paste reference kit** to insert the captured context into its terminal. Insertion is explicit, sends no trailing newline, and does not submit the agent prompt. **Copy kit** remains available as a clipboard fallback.
 

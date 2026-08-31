@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AcpSession, FileEntry, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
 import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getAcpProviders, getGitStatus, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
@@ -8,6 +8,7 @@ import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ReviewSurface } from "./components/ReviewSurface";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AgentWorkbench } from "./components/AgentWorkbench";
+import { AcpProviderPicker } from "./components/AcpProviderPicker";
 import { LazyGitSurface } from "./components/LazyGitSurface";
 import { ReferenceDock } from "./components/ReferenceDock";
 import { WorkspacePicker } from "./components/WorkspacePicker";
@@ -96,6 +97,12 @@ export default function App() {
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [searchResults, setSearchResults] = useState<FileEntry[]>([]);
   const [addingProject, setAddingProject] = useState(false);
+  const [providerPickerOpen, setProviderPickerOpen] = useState(false);
+  const [providerPickerLoading, setProviderPickerLoading] = useState(false);
+  const [providerPickerError, setProviderPickerError] = useState<string>();
+  const [providerPickerProviders, setProviderPickerProviders] = useState<Awaited<ReturnType<typeof getAcpProviders>>>([]);
+  const [startingProviderId, setStartingProviderId] = useState<string>();
+  const startingProviderRef = useRef<string>();
 
   const applyLists = (result: Pick<ProjectMutationResponse, "activeProjectId" | "openProjects" | "knownProjects"> & { acpSessions?: AcpSession[] }, restoreError?: string) => {
     useAppStore.getState().setProjectSession({
@@ -560,29 +567,45 @@ export default function App() {
     }
   };
 
-  const newAgent = () => {
-    const state = useAppStore.getState();
-    const count = state.terminals.filter((terminal) => terminal.kind === "agent").length + state.acpSessions.length;
-    const title = window.prompt("Name this agent session", count === 0 ? "Implement" : count === 1 ? "Plan next task" : `Agent ${count + 1}`);
-    if (title === null) return;
-    const cleanTitle = title.trim() || undefined;
+  const loadAcpProviders = async () => {
     if (!token) return;
-    void getAcpProviders(token).then(async (providers) => {
-      if (!providers.length) {
-        await newTerminal("agent", cleanTitle);
-        return;
-      }
-      const selection = window.prompt(`Provider (${providers.map((item) => item.id).join(", ")}; type pty for terminal)`, providers[0]?.id);
-      if (selection?.trim().toLowerCase() === "pty") {
-        await newTerminal("agent", cleanTitle);
-        return;
-      }
-      const selected = providers.find((provider) => provider.id === selection?.trim());
-      if (!selected) return;
-      const created = await createAcpSession(selected.id, cleanTitle ?? `Agent ${count + 1}`, token);
+    setProviderPickerLoading(true);
+    setProviderPickerError(undefined);
+    try {
+      setProviderPickerProviders(await getAcpProviders(token));
+    } catch (error) {
+      setProviderPickerProviders([]);
+      setProviderPickerError(error instanceof Error ? error.message : "ACP providers could not be loaded");
+    } finally {
+      setProviderPickerLoading(false);
+    }
+  };
+
+  const newAgent = () => {
+    if (!token) return;
+    setProviderPickerOpen(true);
+    void loadAcpProviders();
+  };
+
+  const startAcpProvider = async (providerId: string) => {
+    if (!token || startingProviderRef.current) return;
+    startingProviderRef.current = providerId;
+    setStartingProviderId(providerId);
+    setProviderPickerError(undefined);
+    try {
+      const created = await createAcpSession(providerId, token);
       addAcpSession(created);
-      useAppStore.getState().setFocusedSession(created.id);
-    }).catch((error) => setNotice(error instanceof Error ? error.message : "ACP agent could not be started", "error"));
+      if (useAppStore.getState().activeProjectId === created.projectId) {
+        useAppStore.getState().setFocusedSession(created.id);
+        setMode("agents");
+      }
+      setProviderPickerOpen(false);
+    } catch (error) {
+      setProviderPickerError(error instanceof Error ? error.message : "ACP agent could not be started");
+    } finally {
+      startingProviderRef.current = undefined;
+      setStartingProviderId(undefined);
+    }
   };
 
   const loadedFiles = useMemo(() => Object.values(directories).flatMap((directory) => directory.entries).filter((entry, index, all) => entry.type === "file" && all.findIndex((other) => other.path === entry.path) === index), [directories]);
@@ -707,12 +730,13 @@ export default function App() {
     </div>
     <div className="notices">{notices.map((notice) => <button className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)}>{notice.text}<span>×</span></button>)}</div>
     {terminalError && mode !== "lazygit" && <div className="terminal-error-toast"><b>Terminal note</b> {terminalError}</div>}
-    {addingProject && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddingProject(false); }}>
+     {addingProject && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddingProject(false); }}>
       <WorkspacePicker initialPath="" knownProjects={knownProjects.filter((project) => project.projectId !== activeProjectId)} busy={pickerBusy} error={pickerError} onOpen={(path) => {
         setPickerBusy(true); setPickerError(undefined);
         void openFromPath(path, token).then(() => setAddingProject(false)).catch((error) => setPickerError(error instanceof Error ? error.message : "Could not open workspace")).finally(() => setPickerBusy(false));
       }} />
-    </div>}
+     </div>}
+    {providerPickerOpen && <AcpProviderPicker providers={providerPickerProviders} loading={providerPickerLoading} error={providerPickerError} startingProviderId={startingProviderId} onRetry={() => void loadAcpProviders()} onSelect={(providerId) => void startAcpProvider(providerId)} onClose={() => setProviderPickerOpen(false)} />}
     {(paletteOpen || quickOpen) && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) { setPaletteOpen(false); setQuickOpen(false); } }}>
       <div className="command-modal">
         <div className="command-input"><span>{quickOpen ? "⌕" : "⌘"}</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={quickOpen ? "Search files..." : "Type a command..."} onKeyDown={(event) => { if (event.key === "Escape") { setQuickOpen(false); setPaletteOpen(false); } }} /></div>

@@ -17,6 +17,7 @@ const MAX_COMMANDS = 100;
 const MAX_COMMAND_NAME = 200;
 const MAX_COMMAND_DESCRIPTION = 4_000;
 const MAX_COMMAND_HINT = 500;
+const MAX_TITLE_LENGTH = 80;
 const SECRET_KEY = /token|secret|password|api[-_]?key|authorization|credential|^env$/i;
 
 export interface NormalizedAcpUpdate {
@@ -102,7 +103,10 @@ export function normalizeSessionUpdate(update: acp.SessionUpdate): NormalizedAcp
     case "available_commands_update":
       return { activities: [], availableCommands: normalizeAvailableCommands(update.availableCommands) };
     case "session_info_update":
-      return { activities: [], ...(update.title ? { title: cleanOptionalText(update.title) } : {}) };
+      {
+        const title = cleanOptionalTitle(update.title);
+        return { activities: [], ...(title ? { title } : {}) };
+      }
     case "usage_update":
       return { activities: [{ type: "usage", totalTokens: update.used }] };
     case "current_mode_update":
@@ -298,6 +302,11 @@ function cleanText(value: string | null | undefined, fallback: string): string {
 function cleanOptionalText(value: string | null | undefined): string | undefined {
   const clean = typeof value === "string" ? value.trim() : "";
   return clean || undefined;
+}
+
+function cleanOptionalTitle(value: unknown): string | undefined {
+  const clean = typeof value === "string" ? value.trim() : "";
+  return clean ? clean.slice(0, MAX_TITLE_LENGTH) : undefined;
 }
 
 function commandField(value: unknown, maxLength: number): string | undefined {

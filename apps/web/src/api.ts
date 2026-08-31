@@ -200,8 +200,8 @@ export async function getAcpSession(id: string, token: string): Promise<AcpSessi
   return request<AcpSessionDetail>(`/api/acp/sessions/${encodeURIComponent(id)}`, token);
 }
 
-export async function createAcpSession(providerId: string, title: string, token: string): Promise<AcpSession> {
-  return request<AcpSession>("/api/acp/sessions", token, { method: "POST", body: JSON.stringify({ providerId, title }) });
+export async function createAcpSession(providerId: string, token: string, title?: string): Promise<AcpSession> {
+  return request<AcpSession>("/api/acp/sessions", token, { method: "POST", body: JSON.stringify({ providerId, ...(title ? { title } : {}) }) });
 }
 
 export async function promptAcpSession(id: string, prompt: AcpPromptRequest, token: string): Promise<void> {

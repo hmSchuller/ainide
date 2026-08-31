@@ -207,6 +207,29 @@ kbd { color: #929dad; border: 1px solid #343c48; border-radius: 4px; padding: 1p
 .acp-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 6px; color: #697988; font-size: 9px; }
 .acp-composer-footer button { padding: 5px 8px; color: #a7b6c2; border: 1px solid #364451; border-radius: 3px; background: #1c252d; font-size: 10px; }
 .acp-composer-footer .primary-button { color: #0b241c; border-color: var(--mint); background: var(--mint); }
+.overlay.acp-picker-overlay { place-items: center; padding: 24px; }
+.acp-provider-picker { width: min(460px, 100%); overflow: hidden; border: 1px solid #3b4654; border-radius: 8px; background: #151b21; box-shadow: 0 22px 80px #000b; }
+.acp-provider-picker-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 19px 14px; border-bottom: 1px solid #293540; background: #12171d; }
+.acp-provider-picker-header h2 { margin: 6px 0 0; color: #e4ebf1; font-size: 18px; }
+.acp-picker-close { padding: 0 4px; color: #788693; background: transparent; font-size: 20px; }
+.acp-picker-close:hover { color: #fff; }
+.acp-provider-picker-copy { margin: 0; padding: 14px 19px 5px; color: #84919e; font-size: 11px; line-height: 1.5; }
+.acp-provider-list { display: grid; gap: 7px; padding: 13px 19px 8px; }
+.acp-provider-option { display: flex; align-items: center; gap: 11px; width: 100%; padding: 12px; color: #d1dbe3; border: 1px solid #2d3b45; border-radius: 5px; background: #1a232a; text-align: left; }
+.acp-provider-option:hover:not(:disabled) { border-color: #4e8c73; background: #1d302b; }
+.acp-provider-option:disabled { cursor: wait; opacity: .65; }
+.acp-provider-option > span:nth-child(2) { min-width: 0; flex: 1; }
+.acp-provider-option strong, .acp-provider-option small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acp-provider-option strong { color: #e4eee9; font-size: 12px; }
+.acp-provider-option small { margin-top: 4px; color: #7c8c98; font-size: 10px; }
+.acp-provider-glyph { display: grid; place-items: center; width: 25px; height: 25px; color: var(--mint); border: 1px solid #3f6b59; border-radius: 50%; font-size: 14px; }
+.acp-provider-arrow { color: #78988b; font-size: 17px; }
+.acp-picker-state { display: flex; flex-direction: column; gap: 9px; margin: 13px 19px 8px; padding: 14px; color: #9aa8b2; border: 1px dashed #364650; border-radius: 5px; background: #11181d; font-size: 11px; line-height: 1.45; }
+.acp-picker-state strong { color: #d2dce2; }
+.acp-picker-state button { align-self: flex-start; padding: 6px 9px; color: var(--mint); border: 1px solid #3e6656; border-radius: 3px; background: #17251f; font-size: 10px; }
+.acp-picker-state.error-box { color: #ffadb3; border-style: solid; }
+.acp-picker-cancel { display: block; margin: 2px 19px 16px auto; padding: 6px 9px; color: #84919e; border: 1px solid #35424c; border-radius: 3px; background: transparent; font-size: 10px; }
+.acp-picker-cancel:hover { color: #dbe4ea; }
 .overlay { position: fixed; inset: 0; z-index: 30; display: grid; place-items: start center; padding-top: 92px; background: #050608aa; }.command-modal { width: min(570px, calc(100% - 30px)); overflow: hidden; background: #171c23; border: 1px solid #3b4654; border-radius: 7px; box-shadow: 0 22px 80px #000b; }.command-input { display: flex; align-items: center; gap: 10px; padding: 0 15px; border-bottom: 1px solid #303947; color: var(--mint); }.command-input input { flex: 1; color: #eef3f7; background: transparent; border: 0; outline: 0; padding: 16px 0; font-size: 13px; }.command-input input::placeholder { color: #687585; }.command-list { max-height: 420px; overflow: auto; padding: 6px; }.command-list button { width: 100%; display: flex; justify-content: space-between; gap: 15px; padding: 10px; border-radius: 4px; color: #c7d0da; background: transparent; text-align: left; font-size: 12px; }.command-list button:hover { background: #27322f; color: #fff; }.command-list small { display: block; max-width: 65%; overflow: hidden; color: #6e7c8c; text-overflow: ellipsis; white-space: nowrap; }.command-empty { padding: 18px 10px; color: #718090; font-size: 11px; }
 
 @media (max-width: 760px) {

@@ -74,12 +74,16 @@ describe("session snapshots", () => {
       ...project,
       agentSessions: [{ title: "PTY agent" }],
       acpSessions: [
-        { id: "local-1", title: "OpenCode", providerId: "opencode", acpSessionId: "provider-1", resumability: "resumable", token: "secret" },
+        { id: "local-1", title: "OpenCode", providerId: "opencode", acpSessionId: "provider-1", resumability: "resumable", titleSource: "provider", token: "secret" },
+        { id: "legacy", title: "Legacy", providerId: "cursor", acpSessionId: "provider-legacy", resumability: "non_resumable" },
         { id: "invalid", title: "Missing provider" },
       ],
     }] })?.projects[0];
     expect(parsed?.agentSessions).toEqual([{ title: "PTY agent" }]);
-    expect(parsed?.acpSessions).toEqual([{ id: "local-1", title: "OpenCode", providerId: "opencode", acpSessionId: "provider-1", resumability: "resumable" }]);
+    expect(parsed?.acpSessions).toEqual([
+      { id: "local-1", title: "OpenCode", providerId: "opencode", acpSessionId: "provider-1", resumability: "resumable", titleSource: "provider" },
+      { id: "legacy", title: "Legacy", providerId: "cursor", acpSessionId: "provider-legacy", resumability: "non_resumable", titleSource: "user" },
+    ]);
   });
 
   it("parses provider preferences with strict primitive and provider validation", () => {
@@ -134,6 +138,7 @@ describe("session snapshots", () => {
         providerId: "cursor",
         acpSessionId: "provider-session-1",
         resumability: "resumable",
+        titleSource: "user",
         token: "secret-token",
         content: "transcript",
         env: { API_KEY: "secret" },
@@ -148,6 +153,7 @@ describe("session snapshots", () => {
       providerId: "cursor",
       acpSessionId: "provider-session-1",
       resumability: "resumable",
+      titleSource: "user",
     }]);
   });
 

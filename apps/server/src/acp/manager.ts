@@ -17,6 +17,7 @@ import type {
   AcpSessionDescriptor,
   AcpSessionEvent,
   AcpSessionStatus,
+  AcpTitleSource,
   JsonValue,
 } from "@ainide/shared";
 import type { AcpAgentConfig, AinideConfig } from "../config.js";
@@ -157,16 +158,17 @@ export class AcpSessionManager {
     return [...this.providerPreferenceValues.entries()].map(([providerId, values]) => ({ providerId, values: Object.fromEntries(values) }));
   }
 
-  async create(input: { projectId: string; rootPath: string; providerId: string; title: string }): Promise<AcpSession> {
+  async create(input: { projectId: string; rootPath: string; providerId: string; title?: string }): Promise<AcpSession> {
     const provider = this.provider(input.providerId);
-    const title = cleanTitle(input.title);
     if (!provider) throw new AcpSessionError(400, "Configured ACP provider not found");
+    const title = cleanTitle(input.title === undefined ? provider.label : input.title);
     if (!title) throw new AcpSessionError(400, "A session title is required");
     if (!input.rootPath) throw new AcpSessionError(409, "Open a workspace before creating an ACP session");
 
     const record = this.newRecord({
       id: randomUUID(),
       title,
+      titleSource: input.title === undefined ? "provider" : "user",
       projectId: input.projectId,
       provider,
       rootPath: input.rootPath,
@@ -221,7 +223,7 @@ export class AcpSessionManager {
         continue;
       }
       const provider = this.provider(descriptor.providerId);
-      const record = this.newRecord({ id: descriptor.id, title: descriptor.title, projectId, provider, providerId: descriptor.providerId, rootPath, acpSessionId: descriptor.acpSessionId });
+      const record = this.newRecord({ id: descriptor.id, title: descriptor.title, titleSource: descriptor.titleSource, projectId, provider, providerId: descriptor.providerId, rootPath, acpSessionId: descriptor.acpSessionId });
       record.public.resumability = descriptor.resumability;
       this.sessions.set(record.public.id, record);
       if (descriptor.resumability === "non_resumable") {
@@ -361,6 +363,7 @@ export class AcpSessionManager {
     const clean = cleanTitle(title);
     if (!clean) throw new AcpSessionError(400, "A session title is required");
     record.public.title = clean;
+    record.public.titleSource = "user";
     this.publishStatus(record);
     this.persist(record.public.projectId);
     return cloneSession(record.public);
@@ -386,12 +389,13 @@ export class AcpSessionManager {
     this.sessions.clear();
   }
 
-  private newRecord(input: { id: string; title: string; projectId: string; rootPath: string; provider?: AcpAgentConfig; providerId?: string; acpSessionId?: string }): LiveAcpSession {
+  private newRecord(input: { id: string; title: string; titleSource?: AcpTitleSource; projectId: string; rootPath: string; provider?: AcpAgentConfig; providerId?: string; acpSessionId?: string }): LiveAcpSession {
     const providerId = input.provider?.id ?? input.providerId ?? "unknown";
     const providerLabel = input.provider?.label ?? input.providerId ?? "Unavailable provider";
     const publicSession: AcpSession = {
       id: input.id,
       title: input.title,
+      titleSource: input.titleSource ?? "user",
       projectId: input.projectId,
       providerId,
       providerLabel,
@@ -523,7 +527,11 @@ export class AcpSessionManager {
   private async handleSessionUpdate(record: LiveAcpSession, params: acp.SessionNotification): Promise<void> {
     this.requireProviderSession(record, params.sessionId);
     const normalized = normalizeSessionUpdate(params.update);
-    if (normalized.title) record.public.title = normalized.title;
+    if (normalized.title && record.public.titleSource === "provider" && record.public.title !== normalized.title) {
+      record.public.title = cleanTitle(normalized.title);
+      this.publishStatus(record);
+      this.persist(record.public.projectId);
+    }
     if (normalized.configOptions) this.applyConfigOptions(record, normalized.configOptions.map(toSdkConfigOption));
     if (normalized.availableCommands) {
       record.public.availableCommands = normalized.availableCommands;
@@ -689,6 +697,7 @@ function descriptorFor(record: LiveAcpSession): AcpSessionDescriptor | undefined
     providerId: record.public.providerId,
     acpSessionId: record.public.acpSessionId,
     resumability: record.public.resumability === "resumable" || record.public.resumability === "restored" ? "resumable" : "non_resumable",
+    titleSource: record.public.titleSource,
   };
 }
 

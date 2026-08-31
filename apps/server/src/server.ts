@@ -396,9 +396,9 @@ export async function createServer(): Promise<AinideServer> {
     const values = body(request);
     const projectId = projects.activeId;
     if (!projectId) return reply.code(409).send({ error: "Open a workspace before creating an ACP session" });
-    if (typeof values.providerId !== "string" || typeof values.title !== "string") return reply.code(400).send({ error: "providerId and title are required" });
+    if (typeof values.providerId !== "string" || (values.title !== undefined && typeof values.title !== "string")) return reply.code(400).send({ error: "providerId and optional string title are required" });
     try {
-      return await acp.create({ projectId, rootPath: projectId, providerId: values.providerId, title: values.title });
+      return await acp.create({ projectId, rootPath: projectId, providerId: values.providerId, ...(typeof values.title === "string" ? { title: values.title } : {}) });
     } catch (error) { errorReply(reply, error); }
   });
   app.post("/api/acp/sessions/:id/prompt", async (request, reply) => {

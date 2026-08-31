@@ -23,7 +23,7 @@ const capabilities = { canCancel: true, canClose: false, canLoad: false, canResu
 describe("AgentWorkbench", () => {
   it("combines mixed PTY and ACP sessions only for the active project", () => {
     const pty: TerminalSession = { id: "pty", title: "PTY agent", command: "agent", cwd: "/project", alive: true, kind: "agent", projectId: "/project" };
-    const acp: AcpSession = { id: "acp", title: "ACP agent", projectId: "/project", providerId: "fake", providerLabel: "Fake provider", authMethods: [], status: "live", capabilities, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" };
+     const acp: AcpSession = { id: "acp", title: "ACP agent", titleSource: "user", projectId: "/project", providerId: "fake", providerLabel: "Fake provider", authMethods: [], status: "live", capabilities, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" };
     const hidden: AcpSession = { ...acp, id: "hidden", projectId: "/other", title: "Hidden" };
     expect(combinedAgentEntries([pty], [acp, hidden], "/project")).toEqual([{ kind: "pty", session: pty }, { kind: "acp", session: acp }]);
   });
