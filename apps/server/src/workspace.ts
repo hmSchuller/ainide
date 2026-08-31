@@ -23,6 +23,7 @@ export class WorkspaceManager {
   private patterns: RegExp[] = [];
   private recent: RecentChange[] = [];
   private gitTimer?: NodeJS.Timeout;
+  private usePolling = false;
   private eventHandler: (event: WorkspaceEvent) => void = () => undefined;
 
   onEvent(handler: (event: WorkspaceEvent) => void): void {
@@ -79,13 +80,34 @@ export class WorkspaceManager {
   private async startWatcher(): Promise<void> {
     const root = this.requireRoot();
     await this.closeWatcher();
-    this.watcher = chokidar.watch(root.rootPath, { ignoreInitial: true, followSymlinks: false, ignored: (entry) => {
-      const base = path.basename(entry);
-      return ignoredNames.has(base);
-    } });
+    const watcher = chokidar.watch(root.rootPath, {
+      ignoreInitial: true,
+      followSymlinks: false,
+      usePolling: this.usePolling,
+      interval: 250,
+      ignored: (entry) => {
+        const base = path.basename(entry);
+        if (ignoredNames.has(base)) return true;
+        const relative = path.relative(root.rootPath, entry).split(path.sep).join("/");
+        return Boolean(relative && ignoredByGitignore(this.patterns, relative, base));
+      },
+    });
+    this.watcher = watcher;
+    watcher.on("error", (error) => {
+      if (isWatcherLimitError(error)) void this.fallbackToPolling(watcher, root.rootPath);
+    });
     for (const event of ["add", "change", "unlink", "addDir", "unlinkDir"] as const) {
-      this.watcher.on(event, (changedPath) => this.recordChange(event, changedPath));
+      watcher.on(event, (changedPath) => this.recordChange(event, changedPath));
     }
+  }
+
+  private async fallbackToPolling(failedWatcher: FSWatcher, rootPath: string): Promise<void> {
+    if (this.watcher !== failedWatcher || this.usePolling) return;
+    this.usePolling = true;
+    this.watcher = undefined;
+    try { await failedWatcher.close(); } catch { /* The watcher may already be unusable. */ }
+    if (!this.workspace || this.workspace.rootPath !== rootPath) return;
+    await this.startWatcher();
   }
 
   private async closeWatcher(): Promise<void> {
@@ -257,4 +279,10 @@ export class WorkspaceManager {
     if (!this.workspace) throw new Error("Open a workspace first");
     return this.workspace;
   }
+}
+
+function isWatcherLimitError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === "EMFILE" || code === "ENOSPC";
 }
