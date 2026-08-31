@@ -1,12 +1,23 @@
 import { describe, expect, it } from "vitest";
 import type { EditorTab } from "./types";
-import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, knownProjectSeed, snapshotFromBag } from "./project-ui";
+import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, knownProjectSeed, snapshotFromBag } from "./project-ui";
 
 function tab(overrides: Partial<EditorTab> = {}): EditorTab {
   return { path: "src/a.ts", name: "a.ts", content: "clean", savedContent: "clean", language: "typescript", ...overrides };
 }
 
 describe("project UI bags", () => {
+  it("normalizes Git file ordering and reconciles the previous/current path union", () => {
+    const previous = { branch: "main", dirty: true, isRepository: true, files: [{ path: "src/b.ts", status: "modified" as const }, { path: "src/a.ts", status: "added" as const }], summary: { filesChanged: 2, insertions: 1, deletions: 0 } };
+    const current = { ...previous, files: [{ path: "src/a.ts", status: "added" as const }, { path: "src/c.ts", status: "deleted" as const }] };
+    expect(gitStatusEqual(previous, { ...previous, files: [...previous.files].reverse() })).toBe(true);
+    expect(gitStatusPaths(previous, current)).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+    expect(explorerPathsForGitChanges({ "": true, src: true, docs: true, closed: false }, ["src/c.ts"])).toEqual(["", "src"]);
+    expect(gitChangeType(previous, current, "src/c.ts")).toBe("deleted");
+    expect(gitChangeType(previous, { ...previous, files: [...previous.files, { path: "new.ts", status: "untracked" as const }] }, "new.ts")).toBe("created");
+    expect(gitChangeType(previous, { ...previous, files: [] }, "src/b.ts")).toBe("changed");
+  });
+
   it("keeps dirty buffer contents across switch-and-back", () => {
     const dirty = emptyProjectBag();
     dirty.tabs = [tab({ content: "UNSAVED", savedContent: "clean" })];
@@ -39,6 +50,16 @@ describe("project UI bags", () => {
     expect(next[0]?.savedContent).toBe("hidden-agent-change");
     expect(next[1]?.content).toBe("UNSAVED");
     expect(next[1]?.conflict?.externalContent).toBe("disk");
+  });
+
+  it("preserves binary and unreadable file states during disk reconciliation", () => {
+    const tabs = [tab({ path: "image.png" }), tab({ path: "missing.ts" })];
+    const next = applyDiskToTabs(tabs, {
+      "image.png": { binary: true },
+      "missing.ts": { error: "File deleted on disk" },
+    });
+    expect(next[0]).toMatchObject({ path: "image.png", content: "clean", binary: true });
+    expect(next[1]).toMatchObject({ path: "missing.ts", content: "clean", error: "File deleted on disk" });
   });
 
   it("seeds the picker from last-workspace only when no known projects exist", () => {

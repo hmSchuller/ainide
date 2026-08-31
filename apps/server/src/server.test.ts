@@ -97,8 +97,12 @@ describe("project HTTP API", () => {
     await withServer(async (server) => {
       const denied = await server.app.inject({ method: "GET", url: "/api/file?path=readme.txt" });
       expect(denied.statusCode).toBe(401);
+      expect((await server.app.inject({ method: "GET", url: "/api/git/status" })).statusCode).toBe(401);
       const headers = auth(server.token);
       await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      const status = await server.app.inject({ method: "GET", url: "/api/git/status", headers });
+      expect(status.statusCode).toBe(200);
+      expect(status.json()).toMatchObject({ isRepository: false, dirty: false, files: [] });
       const events: Array<{ type: string; projectId?: string }> = [];
       server.projects.activeManager?.onEvent((event) => events.push(event));
       await server.projects.requireActive().refreshGit();

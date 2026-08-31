@@ -359,7 +359,7 @@ export async function createServer(): Promise<AinideServer> {
     } catch (error) { errorReply(reply, error); }
   });
   app.get("/api/git/status", async (request, reply) => {
-    try { return await projects.requireActive().refreshGit(); } catch (error) { errorReply(reply, error); }
+    try { return await projects.requireActive().refreshGit(false); } catch (error) { errorReply(reply, error); }
   });
   app.get("/api/terminals", async () => projects.activeId ? terminals.list(projects.activeId) : []);
   app.post("/api/terminals", async (request, reply) => {

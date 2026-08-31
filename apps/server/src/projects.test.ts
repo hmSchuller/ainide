@@ -32,7 +32,7 @@ describe("ProjectRegistry", () => {
     expect(workspace.rootPath).toBe(await import("node:fs/promises").then((fs) => fs.realpath(root)));
     expect(registry.activeId).toBe(workspace.rootPath);
     expect(registry.openProjects()).toHaveLength(1);
-    expect(registry.activeManager?.watching).toBe(true);
+    expect(registry.activeManager?.watching).toBe(false);
   });
 
   it("opens a second project without dropping the first", async () => {
@@ -44,7 +44,7 @@ describe("ProjectRegistry", () => {
     expect(registry.openProjects()).toHaveLength(2);
     expect(registry.activeId).toBe(openedSecond.workspace.rootPath);
     expect(registry.managerFor(openedFirst.workspace.rootPath)?.watching).toBe(false);
-    expect(registry.activeManager?.watching).toBe(true);
+    expect(registry.activeManager?.watching).toBe(false);
   });
 
   it("reuses an already-open path instead of creating a second live copy", async () => {

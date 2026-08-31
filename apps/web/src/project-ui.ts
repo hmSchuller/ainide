@@ -1,4 +1,4 @@
-import type { AcpActivity, AcpSession, GitStatus, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace, WorkspaceEvent } from "@ainide/shared";
+import type { AcpActivity, AcpSession, GitStatus, ProjectRef, ProjectSessionSnapshot, RecentChange, TerminalSession, Workspace, WorkspaceEvent } from "@ainide/shared";
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, ReviewState } from "./types";
 import type { ReferenceItem } from "./references";
 
@@ -96,6 +96,42 @@ export function captureProjectBag(state: ProjectUiBag): ProjectUiBag {
 
 export function eventBelongsToActiveProject(event: WorkspaceEvent, activeProjectId?: string): boolean {
   return Boolean(activeProjectId) && event.projectId === activeProjectId;
+}
+
+export function normalizeGitStatus(status: GitStatus): GitStatus {
+  return {
+    branch: status.branch,
+    dirty: status.dirty,
+    isRepository: status.isRepository,
+    files: [...status.files].sort((left, right) => left.path.localeCompare(right.path) || left.status.localeCompare(right.status)),
+    summary: { ...status.summary },
+  };
+}
+
+export function gitStatusEqual(left: GitStatus | undefined, right: GitStatus | undefined): boolean {
+  if (!left || !right) return false;
+  return JSON.stringify(normalizeGitStatus(left)) === JSON.stringify(normalizeGitStatus(right));
+}
+
+export function gitStatusPaths(previous: GitStatus | undefined, current: GitStatus): string[] {
+  return [...new Set([...(previous?.files ?? []), ...current.files].map((file) => file.path))].sort();
+}
+
+export function explorerPathsForGitChanges(expanded: Record<string, boolean>, changedPaths: string[]): string[] {
+  const paths = new Set<string>([""]);
+  for (const [directory, open] of Object.entries(expanded)) {
+    if (!open) continue;
+    if (changedPaths.some((changedPath) => directory === "" || changedPath === directory || changedPath.startsWith(`${directory}/`))) paths.add(directory);
+  }
+  return [...paths];
+}
+
+export function gitChangeType(previous: GitStatus | undefined, current: GitStatus, path: string): RecentChange["type"] {
+  const previousFile = previous?.files.find((file) => file.path === path);
+  const currentFile = current.files.find((file) => file.path === path);
+  if (currentFile?.status === "deleted" || (!currentFile && (previousFile?.status === "added" || previousFile?.status === "untracked"))) return "deleted";
+  if (!previousFile && (currentFile?.status === "added" || currentFile?.status === "untracked")) return "created";
+  return "changed";
 }
 
 export function applyDiskToTabs(

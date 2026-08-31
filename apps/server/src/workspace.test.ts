@@ -1,10 +1,7 @@
-import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import chokidar, { type ChokidarOptions, type FSWatcher } from "chokidar";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceEvent } from "@ainide/shared";
 import { WorkspaceManager } from "./workspace.js";
 import { UnsafePathError } from "./path-resolver.js";
 
@@ -68,41 +65,29 @@ describe("WorkspaceManager file mutations", () => {
     expect(resolvedRoot).toBeTruthy();
   });
 
-  it("does not watch gitignored directories", async () => {
+  it("does not open a recursive watcher", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ainide-workspace-ignore-"));
     await writeFile(path.join(root, "readme.txt"), "hello\n");
     await writeFile(path.join(root, ".gitignore"), "generated/\n");
     await mkdir(path.join(root, "generated"));
-    const events: WorkspaceEvent[] = [];
     const manager = new WorkspaceManager();
     managers.push(manager);
-    manager.onEvent((event) => events.push(event));
     await manager.open(root);
-    events.length = 0;
-
-    await writeFile(path.join(root, "generated", "output.txt"), "ignored\n");
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    expect(events.filter((event) => event.type === "file_changed")).toEqual([]);
+    expect(manager.watching).toBe(false);
+    await expect(manager.list("")).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "readme.txt" }),
+    ]));
   });
 
-  it("falls back to polling when the native watcher reaches its file limit", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "ainide-workspace-polling-"));
-    await writeFile(path.join(root, "readme.txt"), "hello\n");
-    const calls: ChokidarOptions[] = [];
-    vi.spyOn(chokidar, "watch").mockImplementation(((watchPath, options) => {
-      calls.push(options ?? {});
-      const watcher = new EventEmitter() as unknown as FSWatcher & { close: () => Promise<void> };
-      watcher.close = vi.fn(async () => undefined);
-      if (!options?.usePolling) queueMicrotask(() => watcher.emit("error", Object.assign(new Error("too many files"), { code: "EMFILE" })));
-      return watcher;
-    }) as typeof chokidar.watch);
+  it("opens a large workspace without enumerating its descendants", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ainide-workspace-large-"));
+    await Promise.all(Array.from({ length: 2_048 }, (_, index) => mkdir(path.join(root, `directory-${index}`))));
     const manager = new WorkspaceManager();
     managers.push(manager);
 
     await manager.open(root);
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(calls.map((options) => options.usePolling)).toEqual([false, true]);
+    expect(manager.current?.rootPath).toBe(await realpath(root));
+    expect(manager.watching).toBe(false);
   });
 });

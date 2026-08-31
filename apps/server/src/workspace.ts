@@ -1,4 +1,3 @@
-import chokidar, { type FSWatcher } from "chokidar";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -19,11 +18,11 @@ function ignoredByGitignore(patterns: RegExp[], relative: string, name: string):
 
 export class WorkspaceManager {
   private workspace?: Workspace;
-  private watcher?: FSWatcher;
   private patterns: RegExp[] = [];
   private recent: RecentChange[] = [];
-  private gitTimer?: NodeJS.Timeout;
-  private usePolling = false;
+  private gitStatus?: GitStatus;
+  private gitStatusGeneration = 0;
+  private gitStatusRequest?: { generation: number; promise: Promise<GitStatus> };
   private eventHandler: (event: WorkspaceEvent) => void = () => undefined;
 
   onEvent(handler: (event: WorkspaceEvent) => void): void {
@@ -35,7 +34,7 @@ export class WorkspaceManager {
   }
 
   get watching(): boolean {
-    return Boolean(this.watcher);
+    return false;
   }
 
   async validate(rawPath: string): Promise<string> {
@@ -47,74 +46,28 @@ export class WorkspaceManager {
 
   async open(rawPath: string): Promise<Workspace> {
     const resolved = await this.validate(rawPath);
-    await this.closeWatcher();
     this.workspace = { rootPath: resolved, name: path.basename(resolved) || resolved };
     this.recent = [];
+    this.invalidateGitStatus();
     this.patterns = await this.readIgnorePatterns(resolved);
-    await this.startWatcher();
     this.emit({ type: "workspace_changed", projectId: resolved });
     await this.refreshGit();
     return this.workspace;
   }
 
   async pause(): Promise<void> {
-    if (this.gitTimer) clearTimeout(this.gitTimer);
-    this.gitTimer = undefined;
-    await this.closeWatcher();
+    // Project processes remain alive while an inactive project is paused.
   }
 
   async activate(): Promise<void> {
     const root = this.requireRoot();
-    if (!this.watcher) await this.startWatcher();
     this.emit({ type: "workspace_changed", projectId: root.rootPath });
     await this.refreshGit();
   }
 
   async close(): Promise<void> {
-    if (this.gitTimer) clearTimeout(this.gitTimer);
-    this.gitTimer = undefined;
-    await this.closeWatcher();
     this.workspace = undefined;
-  }
-
-  private async startWatcher(): Promise<void> {
-    const root = this.requireRoot();
-    await this.closeWatcher();
-    const watcher = chokidar.watch(root.rootPath, {
-      ignoreInitial: true,
-      followSymlinks: false,
-      usePolling: this.usePolling,
-      interval: 250,
-      ignored: (entry) => {
-        const base = path.basename(entry);
-        if (ignoredNames.has(base)) return true;
-        const relative = path.relative(root.rootPath, entry).split(path.sep).join("/");
-        return Boolean(relative && ignoredByGitignore(this.patterns, relative, base));
-      },
-    });
-    this.watcher = watcher;
-    watcher.on("error", (error) => {
-      if (isWatcherLimitError(error)) void this.fallbackToPolling(watcher, root.rootPath);
-    });
-    for (const event of ["add", "change", "unlink", "addDir", "unlinkDir"] as const) {
-      watcher.on(event, (changedPath) => this.recordChange(event, changedPath));
-    }
-  }
-
-  private async fallbackToPolling(failedWatcher: FSWatcher, rootPath: string): Promise<void> {
-    if (this.watcher !== failedWatcher || this.usePolling) return;
-    this.usePolling = true;
-    this.watcher = undefined;
-    try { await failedWatcher.close(); } catch { /* The watcher may already be unusable. */ }
-    if (!this.workspace || this.workspace.rootPath !== rootPath) return;
-    await this.startWatcher();
-  }
-
-  private async closeWatcher(): Promise<void> {
-    if (!this.watcher) return;
-    const watcher = this.watcher;
-    this.watcher = undefined;
-    await watcher.close();
+    this.invalidateGitStatus();
   }
 
   private emit(event: WorkspaceEvent): void {
@@ -135,24 +88,17 @@ export class WorkspaceManager {
     }
   }
 
-  private recordChange(event: string, changedPath: string): void {
-    if (!this.workspace) return;
-    const relative = path.relative(this.workspace.rootPath, changedPath).split(path.sep).join("/");
-    if (!relative || relative.startsWith("..") || ignoredNames.has(path.basename(relative))) return;
-    const type: RecentChange["type"] = event === "add" || event === "addDir" ? "created" : event === "unlink" || event === "unlinkDir" ? "deleted" : "changed";
-    this.recent = [{ path: relative, type, timestamp: Date.now() }, ...this.recent.filter((item) => item.path !== relative)].slice(0, 200);
-    const projectId = this.workspace.rootPath;
-    this.emit({ type: "file_changed", projectId, path: relative, change: type });
-    this.emit({ type: "workspace_changed", projectId });
-    if (this.gitTimer) clearTimeout(this.gitTimer);
-    this.gitTimer = setTimeout(() => void this.refreshGit(), 150);
-  }
-
-  async refreshGit(): Promise<GitStatus | undefined> {
+  async refreshGit(emit = true): Promise<GitStatus | undefined> {
     if (!this.workspace) return undefined;
-    const status = await getGitStatus(this.workspace.rootPath);
-    this.emit({ type: "git_changed", projectId: this.workspace.rootPath, status });
-    return status;
+    const rootPath = this.workspace.rootPath;
+    for (;;) {
+      const generation = this.gitStatusGeneration;
+      const status = await this.readGitStatus(true, rootPath);
+      if (!this.workspace || this.workspace.rootPath !== rootPath) return undefined;
+      if (generation !== this.gitStatusGeneration) continue;
+      if (emit) this.emit({ type: "git_changed", projectId: rootPath, status });
+      return status;
+    }
   }
 
   async list(relativePath: string): Promise<FileEntry[]> {
@@ -160,7 +106,7 @@ export class WorkspaceManager {
     const directory = await resolveSafePath(root.rootPath, relativePath);
     const stat = await fs.stat(directory);
     if (!stat.isDirectory()) throw new Error("Requested path is not a directory");
-    const gitStatus = await getGitStatus(root.rootPath);
+    const gitStatus = this.gitStatus ?? await this.readGitStatus(false, root.rootPath);
     const statusMap = new Map(gitStatus.files.map((file) => [file.path, file.status]));
     const entries = await fs.readdir(directory, { withFileTypes: true });
     return entries.filter((entry) => {
@@ -220,6 +166,7 @@ export class WorkspaceManager {
     const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.ainide-${randomUUID()}.tmp`);
     await fs.writeFile(temporary, content, "utf8");
     await fs.rename(temporary, filePath);
+    this.invalidateGitStatus();
   }
 
   async delete(relativePath: string): Promise<void> {
@@ -227,6 +174,7 @@ export class WorkspaceManager {
     if (!relativePath) throw new Error("A relative path is required");
     const target = await resolveSafePath(root.rootPath, relativePath);
     await fs.rm(target, { recursive: true, force: true });
+    this.invalidateGitStatus();
   }
 
   async rename(from: string, to: string): Promise<void> {
@@ -242,6 +190,7 @@ export class WorkspaceManager {
     }
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(source, destination);
+    this.invalidateGitStatus();
   }
 
   async createFile(relativePath: string): Promise<void> {
@@ -256,6 +205,7 @@ export class WorkspaceManager {
     }
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, "", "utf8");
+    this.invalidateGitStatus();
   }
 
   async createDirectory(relativePath: string): Promise<void> {
@@ -279,10 +229,23 @@ export class WorkspaceManager {
     if (!this.workspace) throw new Error("Open a workspace first");
     return this.workspace;
   }
-}
 
-function isWatcherLimitError(error: unknown): boolean {
-  if (!error || typeof error !== "object" || !("code" in error)) return false;
-  const code = (error as { code?: unknown }).code;
-  return code === "EMFILE" || code === "ENOSPC";
+  private invalidateGitStatus(): void {
+    this.gitStatus = undefined;
+    this.gitStatusGeneration += 1;
+  }
+
+  private async readGitStatus(force: boolean, rootPath: string): Promise<GitStatus> {
+    if (!force && this.gitStatus) return this.gitStatus;
+    const generation = this.gitStatusGeneration;
+    if (this.gitStatusRequest?.generation === generation) return this.gitStatusRequest.promise;
+    const promise = getGitStatus(rootPath).then((status) => {
+      if (this.workspace?.rootPath === rootPath && this.gitStatusGeneration === generation) this.gitStatus = status;
+      return status;
+    }).finally(() => {
+      if (this.gitStatusRequest?.promise === promise) this.gitStatusRequest = undefined;
+    });
+    this.gitStatusRequest = { generation, promise };
+    return promise;
+  }
 }

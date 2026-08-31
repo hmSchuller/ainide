@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AcpSession, FileEntry, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
+import type { AcpSession, FileEntry, GitStatus, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
 import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getAcpProviders, getGitStatus, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
 import { EditorSurface, language } from "./components/Editor";
@@ -12,8 +12,10 @@ import { AcpProviderPicker } from "./components/AcpProviderPicker";
 import { LazyGitSurface } from "./components/LazyGitSurface";
 import { ReferenceDock } from "./components/ReferenceDock";
 import { WorkspacePicker } from "./components/WorkspacePicker";
-import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, knownProjectSeed, snapshotFromBag } from "./project-ui";
+import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, knownProjectSeed, snapshotFromBag } from "./project-ui";
 import { createAutoSaver } from "./auto-save";
+import { createGitPollingScheduler } from "./git-polling";
+import { createGitRequestCoordinator } from "./git-request";
 import { findPaneForPath, isDirty, useAppStore } from "./store";
 import type { EditorPaneId, EditorTab } from "./types";
 import type { CodeSelection } from "./references";
@@ -103,6 +105,7 @@ export default function App() {
   const [providerPickerProviders, setProviderPickerProviders] = useState<Awaited<ReturnType<typeof getAcpProviders>>>([]);
   const [startingProviderId, setStartingProviderId] = useState<string>();
   const startingProviderRef = useRef<string>();
+  const gitRequestRef = useRef(createGitRequestCoordinator());
 
   const applyLists = (result: Pick<ProjectMutationResponse, "activeProjectId" | "openProjects" | "knownProjects"> & { acpSessions?: AcpSession[] }, restoreError?: string) => {
     useAppStore.getState().setProjectSession({
@@ -114,12 +117,156 @@ export default function App() {
     setAcpSessions(result.acpSessions ?? []);
   };
 
+  const isCurrentProject = (projectId: string, nextToken: string): boolean => {
+    const current = useAppStore.getState();
+    return current.token === nextToken && current.activeProjectId === projectId && current.workspace?.rootPath === projectId;
+  };
+
+  const nextGitRequest = (): number => {
+    return gitRequestRef.current.begin();
+  };
+
+  const gitRequestIsCurrent = (requestId: number, projectId: string, nextToken: string): boolean => {
+    const current = useAppStore.getState();
+    return gitRequestRef.current.isCurrent(requestId, projectId, nextToken, {
+      token: current.token,
+      activeProjectId: current.activeProjectId,
+      workspaceRoot: current.workspace?.rootPath,
+    });
+  };
+
+  const allExplorerPaths = (): string[] => {
+    const state = useAppStore.getState();
+    return [...new Set(["", ...Object.keys(state.directories), ...Object.entries(state.expanded).flatMap(([path, open]) => open ? [path] : [])])];
+  };
+
+  const refreshDirectories = async (paths: string[], nextToken: string, projectId: string, requestId?: number) => {
+    await Promise.all(paths.map(async (path) => {
+      try {
+        const entries = await listFiles(path, nextToken);
+        if ((!requestId || gitRequestIsCurrent(requestId, projectId, nextToken)) && isCurrentProject(projectId, nextToken)) {
+          setDirectory(path, { entries, loading: false });
+        }
+      } catch {
+        // Keep the previous tree if an event races a deleted directory or project switch.
+      }
+    }));
+  };
+
+  const handleExternalChange = async (
+    path: string,
+    change: "changed" | "created" | "deleted",
+    context: { projectId?: string; nextToken?: string; requestId?: number; refreshExplorer?: boolean } = {},
+  ) => {
+    const current = useAppStore.getState();
+    const currentWorkspace = current.workspace;
+    const projectId = context.projectId ?? current.activeProjectId;
+    const nextToken = context.nextToken ?? current.token;
+    const isCurrentOperation = () => Boolean(projectId && nextToken && isCurrentProject(projectId, nextToken))
+      && (context.requestId === undefined || gitRequestIsCurrent(context.requestId, projectId!, nextToken!));
+    if (!projectId || !nextToken || !isCurrentOperation()) return;
+    const matching = current.tabs.find((tab) => tab.path === path);
+    if (!matching) {
+      markRecent(path);
+      if (context.refreshExplorer !== false && currentWorkspace) void refreshDirectories([""], nextToken, projectId);
+      return;
+    }
+    try {
+      const external = await readFile(matching.path, nextToken);
+      if (!isCurrentOperation()) return;
+      const latest = useAppStore.getState().tabs.find((tab) => tab.path === path);
+      if (!latest || external.binary || (external.content === latest.content && !latest.error)) return;
+      markRecent(path);
+      if (isDirty(latest)) {
+        if (latest.conflict?.externalContent !== external.content) updateTab(path, { conflict: { externalContent: external.content }, error: undefined });
+      } else {
+        updateTab(path, { content: external.content, savedContent: external.content, conflict: undefined, error: undefined });
+        setNotice(`${latest.name} reloaded from disk`, "info");
+      }
+    } catch (error) {
+      if (!isCurrentOperation()) return;
+      const latest = useAppStore.getState().tabs.find((tab) => tab.path === path);
+      if (!latest) return;
+      const message = change === "deleted" ? "File deleted on disk" : error instanceof Error ? error.message : "Unable to reload file";
+      if (latest.error !== message) {
+        if (change === "deleted") updateTab(path, { error: message });
+        setNotice(change === "deleted" ? `${latest.name} was deleted on disk` : `Could not reload ${latest.name}`, "error");
+      }
+      markRecent(path);
+    }
+    if (context.refreshExplorer !== false && change !== "changed" && currentWorkspace) void refreshDirectories([""], nextToken, projectId);
+  };
+
+  const reconcileGitStatus = async (
+    status: GitStatus,
+    projectId: string,
+    nextToken: string,
+    requestId: number,
+    options: { refreshAll?: boolean; probeOpenFiles?: boolean } = {},
+  ): Promise<void> => {
+    if (!gitRequestIsCurrent(requestId, projectId, nextToken)) return;
+    const previous = useAppStore.getState().git;
+    const changed = !gitStatusEqual(previous, status);
+    if (changed) setGit(status);
+    if (!status.isRepository) {
+      if (options.refreshAll) await refreshDirectories(allExplorerPaths(), nextToken, projectId, requestId);
+      return;
+    }
+    const changedPaths = previous ? gitStatusPaths(previous, status) : [];
+    changedPaths.forEach((path) => {
+      markRecent(path);
+    });
+    if (changed || options.refreshAll) {
+      const paths = options.refreshAll
+        ? allExplorerPaths()
+        : explorerPathsForGitChanges(useAppStore.getState().expanded, changedPaths);
+      await refreshDirectories(paths, nextToken, projectId, requestId);
+    }
+    if (options.probeOpenFiles) {
+      const tabs = useAppStore.getState().tabs.filter((tab) => !tab.binary);
+      await Promise.all(tabs.map(async (tab) => {
+        const latest = useAppStore.getState();
+        const change = gitChangeType(previous, status, tab.path);
+        if (!gitRequestIsCurrent(requestId, projectId, nextToken) || !latest.tabs.some((candidate) => candidate.path === tab.path)) return;
+        await handleExternalChange(tab.path, change, { projectId, nextToken, requestId, refreshExplorer: false });
+      }));
+    }
+  };
+
+  const requestGitStatus = async (
+    nextToken: string,
+    projectId: string,
+    options: { refreshAll?: boolean; probeOpenFiles?: boolean } = {},
+  ): Promise<{ ok: boolean; requestId: number }> => {
+    const requestId = nextGitRequest();
+    try {
+      const status = await getGitStatus(nextToken);
+      if (!gitRequestIsCurrent(requestId, projectId, nextToken)) return { ok: false, requestId };
+      await reconcileGitStatus(status, projectId, nextToken, requestId, options);
+      return { ok: true, requestId };
+    } catch (error) {
+      if (gitRequestIsCurrent(requestId, projectId, nextToken)) setNotice(error instanceof Error ? error.message : "Git status unavailable", "error");
+      return { ok: false, requestId };
+    }
+  };
+
   const loadExplorerAndGit = async (nextToken: string) => {
-    const [entries, status] = await Promise.allSettled([listFiles("", nextToken), getGitStatus(nextToken)]);
-    if (entries.status === "fulfilled") setDirectory("", { entries: entries.value, loading: false });
-    else setDirectory("", { entries: [], loading: false, error: entries.reason instanceof Error ? entries.reason.message : "Unable to read workspace" });
-    if (status.status === "fulfilled") setGit(status.value);
-    else setNotice(status.reason instanceof Error ? status.reason.message : "Git status unavailable", "error");
+    const projectId = useAppStore.getState().activeProjectId;
+    if (!projectId) return;
+    const requestId = nextGitRequest();
+    let status: GitStatus | undefined;
+    try {
+      status = await getGitStatus(nextToken);
+      if (gitRequestIsCurrent(requestId, projectId, nextToken)) setGit(status);
+    } catch (error) {
+      if (gitRequestIsCurrent(requestId, projectId, nextToken)) setNotice(error instanceof Error ? error.message : "Git status unavailable", "error");
+    }
+    try {
+      const entries = await listFiles("", nextToken);
+      if (gitRequestIsCurrent(requestId, projectId, nextToken)) setDirectory("", { entries, loading: false });
+    } catch (error) {
+      if (gitRequestIsCurrent(requestId, projectId, nextToken)) setDirectory("", { entries: [], loading: false, error: error instanceof Error ? error.message : "Unable to read workspace" });
+    }
   };
 
   const reconcileTerminals = async (nextToken: string) => {
@@ -250,12 +397,15 @@ export default function App() {
       if (!("projectId" in message)) return;
       const current = useAppStore.getState();
       if (!eventBelongsToActiveProject(message, current.activeProjectId)) return;
-      if (message.type === "git_changed") setGit(message.status);
-      if (message.type === "file_changed") void handleExternalChange(message.path, message.change);
-      if (message.type === "workspace_changed") {
-        const active = useAppStore.getState();
-        if (active.workspace && active.token) void loadExplorerAndGit(active.token);
-      }
+       if (message.type === "git_changed") {
+         const requestId = nextGitRequest();
+         void reconcileGitStatus(message.status, message.projectId, current.token, requestId, { probeOpenFiles: true });
+       }
+       if (message.type === "file_changed") void handleExternalChange(message.path, message.change, { projectId: message.projectId, nextToken: current.token });
+       if (message.type === "workspace_changed") {
+         const active = useAppStore.getState();
+         if (active.workspace && active.token && active.activeProjectId) void requestGitStatus(active.token, active.activeProjectId, { refreshAll: true, probeOpenFiles: true });
+       }
     };
     socket.onerror = () => setNotice("Live workspace events disconnected", "error");
     return () => socket.close();
@@ -296,28 +446,6 @@ export default function App() {
     }, 400);
     return () => window.clearTimeout(timer);
   }, [token, workspace, activeProjectId, tabs, panes, mode, terminals, directories]);
-
-  const handleExternalChange = async (path: string, change: "changed" | "created" | "deleted") => {
-    const current = useAppStore.getState();
-    const currentWorkspace = current.workspace;
-    markRecent(path);
-    const matching = current.tabs.find((tab) => tab.path === path);
-    if (!matching || !current.token) { if (currentWorkspace) void refreshDirectory("", current.token); return; }
-    try {
-      const external = await readFile(matching.path, current.token);
-      if (external.binary) return;
-      if (isDirty(matching)) updateTab(matching.path, { conflict: { externalContent: external.content } });
-      else { updateTab(matching.path, { content: external.content, savedContent: external.content, conflict: undefined }); setNotice(`${matching.name} reloaded from disk`, "info"); }
-    } catch {
-      if (change === "deleted") updateTab(matching.path, { error: "File deleted on disk" });
-      setNotice(change === "deleted" ? `${matching.name} was deleted on disk` : `Could not reload ${matching.name}`, "error");
-    }
-    if (change !== "changed" && currentWorkspace) void refreshDirectory("", current.token);
-  };
-
-  const refreshDirectory = async (path: string, nextToken: string) => {
-    try { setDirectory(path, { entries: await listFiles(path, nextToken), loading: false }); } catch { /* The explorer keeps its previous entries when an event races deletion. */ }
-  };
 
   const openFile = async (entry: FileEntry, requestedPane: EditorPaneId = "primary"): Promise<EditorPaneId | undefined> => {
     if (!token) return undefined;
@@ -378,14 +506,22 @@ export default function App() {
 
   const refresh = async () => {
     if (!workspace || !token) return;
-    const state = useAppStore.getState();
-    const paths = [...new Set([
-      ...Object.keys(state.directories),
-      ...Object.entries(state.expanded).flatMap(([path, open]) => open ? [path] : []),
-    ])];
-    await Promise.all(paths.map(async (path) => { try { setDirectory(path, { entries: await listFiles(path, token), loading: false }); } catch { /* Keep the previous tree if one folder disappears. */ } }));
-    try { setGit(await getGitStatus(token)); } catch (error) { setNotice(error instanceof Error ? error.message : "Git refresh failed", "error"); }
+    const projectId = activeProjectId ?? workspace.rootPath;
+    const refreshed = await requestGitStatus(token, projectId, { refreshAll: true, probeOpenFiles: true });
+    if (!refreshed.ok && gitRequestIsCurrent(refreshed.requestId, projectId, token)) {
+      await refreshDirectories(allExplorerPaths(), token, projectId, refreshed.requestId);
+    }
   };
+
+  useEffect(() => {
+    if (!token || !workspace || !activeProjectId || git?.isRepository !== true) return;
+    const projectId = activeProjectId;
+    const scheduler = createGitPollingScheduler(async () => { await requestGitStatus(token, projectId, { probeOpenFiles: true }); });
+    scheduler.start();
+    return () => scheduler.stop();
+    // The scheduler is recreated only when its project, token, or repository kind changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, workspace?.rootPath, activeProjectId, git?.isRepository]);
 
   const switchToReview = async (restart = false) => {
     if (!token) {

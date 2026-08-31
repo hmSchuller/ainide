@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { acpEventsUrl, createAcpSession, getAcpProviders, parseAcpEvent, promptAcpSession } from "./api";
+import { acpEventsUrl, createAcpSession, getAcpProviders, getGitStatus, parseAcpEvent, promptAcpSession } from "./api";
 
 describe("ACP web API", () => {
   beforeEach(() => {
@@ -36,5 +36,27 @@ describe("ACP web API", () => {
   it("puts the session token on the ACP socket URL", () => {
     vi.stubGlobal("window", { location: { protocol: "https:", host: "ainide.test" } });
     expect(acpEventsUrl("token-2")).toBe("wss://ainide.test/acp-events?token=token-2");
+  });
+
+  it("uses the authenticated Git status route", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string>)["x-session-token"]).toBe("token-git");
+      return new Response(JSON.stringify({ isRepository: true, dirty: false, files: [], summary: { filesChanged: 0, insertions: 0, deletions: 0 } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getGitStatus("token-git")).resolves.toMatchObject({ isRepository: true, dirty: false });
+    expect(fetchMock).toHaveBeenCalledWith("/api/git/status", expect.objectContaining({ headers: expect.objectContaining({ "x-session-token": "token-git" }) }));
+  });
+
+  it("retains the last successful value when a later status request fails", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ isRepository: true, dirty: true, files: [{ path: "a.ts", status: "modified" }], summary: { filesChanged: 1, insertions: 1, deletions: 0 } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503, statusText: "Unavailable" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const previous = await getGitStatus("token-git");
+    await expect(getGitStatus("token-git")).rejects.toThrow("503");
+    expect(previous.files).toEqual([{ path: "a.ts", status: "modified" }]);
   });
 });
