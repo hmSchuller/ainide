@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { captureFileReference, captureSelectionReference, captureTextFileReference, copyReferenceKit, serializeReference, serializeReferenceKit } from "./references";
+import { appendReferenceItems, captureFileReference, captureSelectionReference, captureTextFileReference, copyReferenceKit, promptContextFromReferences, serializeReference, serializeReferenceKit } from "./references";
 
 describe("references", () => {
   it("normalizes a selection to inclusive complete lines", () => {
@@ -43,5 +43,12 @@ describe("references", () => {
     expect(kit).toHaveLength(1);
     expect((await copyReferenceKit(kit, async () => { throw new Error("denied"); })).error).toBe("denied");
     expect(kit).toHaveLength(1);
+  });
+
+  it("keeps ACP handoff drafts explicit, deduplicated, and provenance-aware", () => {
+    const selected = captureSelectionReference({ path: "src/dirty.ts", language: "typescript", content: "one\ntwo\nthree", selection: { startLineNumber: 2, endLineNumber: 3 } });
+    const current = appendReferenceItems([], [selected]);
+    expect(appendReferenceItems(current, [selected])).toHaveLength(1);
+    expect(promptContextFromReferences(current)).toEqual([{ path: "src/dirty.ts", content: "two\nthree", language: "typescript", startLine: 2, endLine: 3 }]);
   });
 });

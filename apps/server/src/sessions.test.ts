@@ -59,6 +59,29 @@ describe("session snapshots", () => {
     expect(parseSessionSnapshot({ version: 1, projects: [{ ...project, agentSessions: [{ title: " ", pid: 12 }, { title: 42 }] }] })?.projects[0].agentSessions).toEqual([]);
   });
 
+  it("parses ACP descriptors separately from legacy PTY agents", () => {
+    const project = {
+      rootPath: "/tmp/demo-project",
+      name: "demo-project",
+      openFilePaths: [],
+      panes: { primary: { tabPaths: [] }, secondary: { tabPaths: [] } },
+      secondaryOpen: false,
+      expandedPaths: [],
+      mode: "agents",
+      terminalKinds: ["agent"],
+    };
+    const parsed = parseSessionSnapshot({ version: 1, projects: [{
+      ...project,
+      agentSessions: [{ title: "PTY agent" }],
+      acpSessions: [
+        { id: "local-1", title: "OpenCode", providerId: "opencode", acpSessionId: "provider-1", resumability: "resumable", token: "secret" },
+        { id: "invalid", title: "Missing provider" },
+      ],
+    }] })?.projects[0];
+    expect(parsed?.agentSessions).toEqual([{ title: "PTY agent" }]);
+    expect(parsed?.acpSessions).toEqual([{ id: "local-1", title: "OpenCode", providerId: "opencode", acpSessionId: "provider-1", resumability: "resumable" }]);
+  });
+
   it("persists only title metadata for agents and excludes forbidden session data", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-agent-sessions-"));
     const filePath = path.join(dir, "sessions.json");
@@ -82,6 +105,34 @@ describe("session snapshots", () => {
       expect(raw).not.toContain(forbidden);
     }
     expect(JSON.parse(raw).projects[0].agentSessions).toEqual([{ title: "Implement" }]);
+  });
+
+  it("persists ACP identity and resumability without secrets or protocol data", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-acp-sessions-"));
+    const filePath = path.join(dir, "sessions.json");
+    const project = {
+      ...emptyProjectSnapshot({ rootPath: "/tmp/demo-project", name: "demo-project" }),
+      acpSessions: [{
+        id: "local-1",
+        title: "Review",
+        providerId: "cursor",
+        acpSessionId: "provider-session-1",
+        resumability: "resumable",
+        token: "secret-token",
+        content: "transcript",
+        env: { API_KEY: "secret" },
+      }],
+    } as unknown as ProjectSessionSnapshot;
+    await saveSessionSnapshot({ version: 1, projects: [project] }, filePath);
+    const raw = await readFile(filePath, "utf8");
+    for (const forbidden of ["secret-token", "transcript", "API_KEY", "provider-session-1x"]) expect(raw).not.toContain(forbidden);
+    expect(JSON.parse(raw).projects[0].acpSessions).toEqual([{
+      id: "local-1",
+      title: "Review",
+      providerId: "cursor",
+      acpSessionId: "provider-session-1",
+      resumability: "resumable",
+    }]);
   });
 
   it("round-trips all primary modes and falls back unknown modes to Edit", () => {

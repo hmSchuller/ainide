@@ -1,4 +1,11 @@
 import type {
+  AcpConfigOption,
+  AcpPromptRequest,
+  AcpProviderDescriptor,
+  AcpRequestResponse,
+  AcpServerEvent,
+  AcpSession,
+  AcpSessionDetail,
   FileEntry,
   GitStatus,
   ProjectRef,
@@ -80,6 +87,7 @@ export interface ProjectMutationResponse {
   openProjects: ProjectRef[];
   knownProjects: ProjectRef[];
   snapshot?: ProjectSessionSnapshot;
+  acpSessions?: AcpSession[];
 }
 
 export async function openProject(path: string, token: string, snapshot?: ProjectSessionSnapshot): Promise<ProjectMutationResponse> {
@@ -180,6 +188,51 @@ export async function getTerminals(token: string): Promise<TerminalSession[]> {
   return Array.isArray(result) ? result : result.sessions ?? [];
 }
 
+export async function getAcpProviders(token: string): Promise<AcpProviderDescriptor[]> {
+  return request<AcpProviderDescriptor[]>("/api/acp/providers", token);
+}
+
+export async function getAcpSessions(token: string): Promise<AcpSession[]> {
+  return request<AcpSession[]>("/api/acp/sessions", token);
+}
+
+export async function getAcpSession(id: string, token: string): Promise<AcpSessionDetail> {
+  return request<AcpSessionDetail>(`/api/acp/sessions/${encodeURIComponent(id)}`, token);
+}
+
+export async function createAcpSession(providerId: string, title: string, token: string): Promise<AcpSession> {
+  return request<AcpSession>("/api/acp/sessions", token, { method: "POST", body: JSON.stringify({ providerId, title }) });
+}
+
+export async function promptAcpSession(id: string, prompt: AcpPromptRequest, token: string): Promise<void> {
+  await request(`/api/acp/sessions/${encodeURIComponent(id)}/prompt`, token, { method: "POST", body: JSON.stringify(prompt) });
+}
+
+export async function cancelAcpSession(id: string, token: string): Promise<void> {
+  await request(`/api/acp/sessions/${encodeURIComponent(id)}/cancel`, token, { method: "POST", body: JSON.stringify({}) });
+}
+
+export async function setAcpConfigOption(id: string, configId: string, value: string | boolean, token: string): Promise<AcpConfigOption[]> {
+  const result = await request<{ options: AcpConfigOption[] }>(`/api/acp/sessions/${encodeURIComponent(id)}/config`, token, { method: "POST", body: JSON.stringify({ configId, value }) });
+  return result.options;
+}
+
+export async function authenticateAcpSession(id: string, methodId: string, token: string): Promise<AcpSession> {
+  return request<AcpSession>(`/api/acp/sessions/${encodeURIComponent(id)}/auth`, token, { method: "POST", body: JSON.stringify({ methodId }) });
+}
+
+export async function respondToAcpRequest(id: string, requestId: string, response: AcpRequestResponse, token: string): Promise<void> {
+  await request(`/api/acp/sessions/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}`, token, { method: "POST", body: JSON.stringify(response) });
+}
+
+export async function renameAcpSession(id: string, title: string, token: string): Promise<AcpSession> {
+  return request<AcpSession>(`/api/acp/sessions/${encodeURIComponent(id)}`, token, { method: "PATCH", body: JSON.stringify({ title }) });
+}
+
+export async function closeAcpSession(id: string, token: string): Promise<void> {
+  await request(`/api/acp/sessions/${encodeURIComponent(id)}`, token, { method: "DELETE" });
+}
+
 export async function createTerminal(kind: TerminalSession["kind"], token: string, title?: string): Promise<TerminalSession> {
   const result = await request<TerminalResponse | TerminalSession>("/api/terminals", token, {
     method: "POST",
@@ -229,6 +282,19 @@ export function parseEvent(data: string): WorkspaceEvent | RecentChange | null {
   } catch {
     return null;
   }
+}
+
+export function parseAcpEvent(data: string): AcpServerEvent | null {
+  try {
+    const event = JSON.parse(data) as AcpServerEvent;
+    return event && typeof event === "object" && "type" in event ? event : null;
+  } catch {
+    return null;
+  }
+}
+
+export function acpEventsUrl(token: string): string {
+  return websocketUrl("/acp-events", token);
 }
 
 export async function insertTerminalInput(token: string, sessionId: string, data: string): Promise<void> {

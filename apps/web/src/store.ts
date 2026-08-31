@@ -1,8 +1,9 @@
 import { create } from "zustand";
-import type { FileEntry, GitStatus, ProjectRef, TerminalSession, Workspace } from "@ainide/shared";
+import type { AcpActivity, AcpServerEvent, AcpSession, FileEntry, GitStatus, ProjectRef, TerminalSession, Workspace } from "@ainide/shared";
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, Notice, ReviewState } from "./types";
 import type { ReferenceItem } from "./references";
-import { captureProjectBag, emptyPanes, emptyProjectBag, type ProjectUiBag } from "./project-ui";
+import { applyAcpServerEvent, type AcpClientState } from "./acp-state";
+import { captureProjectBag, emptyPanes, emptyProjectBag, type AcpPromptDraft, type ProjectUiBag } from "./project-ui";
 import { persistTerminalCollapsed, readTerminalCollapsedPreference } from "./layout-prefs";
 
 interface AppState {
@@ -25,6 +26,11 @@ interface AppState {
   focusedPaneId: EditorPaneId;
   git?: GitStatus;
   terminals: TerminalSession[];
+  acpSessions: AcpSession[];
+  acpHistory: Record<string, AcpActivity[]>;
+  acpDrafts: Record<string, AcpPromptDraft>;
+  acpSequences: Record<string, number>;
+  acpQueued: AcpClientState["queued"];
   activeTerminalId?: string;
   referenceKit: ReferenceItem[];
   focusedSessionId?: string;
@@ -53,6 +59,12 @@ interface AppState {
   closeSecondary: () => void;
   setGit: (git?: GitStatus) => void;
   setTerminals: (terminals: TerminalSession[]) => void;
+  setAcpSessions: (sessions: AcpSession[]) => void;
+  updateAcpSession: (id: string, update: Partial<AcpSession>) => void;
+  applyAcpEvent: (event: AcpServerEvent) => void;
+  setAcpDraft: (id: string, draft: AcpPromptDraft) => void;
+  updateAcpDraft: (id: string, update: Partial<AcpPromptDraft>) => void;
+  clearAcpDraft: (id: string) => void;
   addTerminal: (terminal: TerminalSession) => void;
   updateTerminal: (id: string, update: Partial<TerminalSession>) => void;
   removeTerminal: (id: string) => void;
@@ -110,6 +122,11 @@ export const useAppStore = create<AppState>((set) => ({
   secondaryOpen: false,
   focusedPaneId: "primary",
   terminals: [],
+  acpSessions: [],
+  acpHistory: {},
+  acpDrafts: {},
+  acpSequences: {},
+  acpQueued: {},
   referenceKit: [],
   terminalCollapsed: readTerminalCollapsedPreference(),
   terminalMaximized: false,
@@ -174,14 +191,57 @@ export const useAppStore = create<AppState>((set) => ({
     const ids = new Set(terminals.map((terminal) => terminal.id));
     const agents = terminals.filter((terminal) => terminal.kind === "agent");
     const tools = terminals.filter((terminal) => terminal.kind !== "agent");
+    const agentIds = new Set([...agents.map((agent) => agent.id), ...current.acpSessions.map((session) => session.id)]);
+    const liveAgentIds = new Set([...agents.filter((agent) => agent.alive).map((agent) => agent.id), ...current.acpSessions.filter((session) => session.status === "live" || session.status === "waiting").map((session) => session.id)]);
     return {
       terminals,
       activeTerminalId: current.activeTerminalId && ids.has(current.activeTerminalId) ? current.activeTerminalId : terminals[0]?.id,
-      focusedSessionId: current.focusedSessionId && ids.has(current.focusedSessionId) ? current.focusedSessionId : agents[0]?.id,
-      pinnedSessionId: current.pinnedSessionId && ids.has(current.pinnedSessionId) ? current.pinnedSessionId : undefined,
+      focusedSessionId: current.focusedSessionId && agentIds.has(current.focusedSessionId) ? current.focusedSessionId : agents[0]?.id ?? current.acpSessions[0]?.id,
+      pinnedSessionId: current.pinnedSessionId && agentIds.has(current.pinnedSessionId) ? current.pinnedSessionId : undefined,
       toolSessionId: current.toolSessionId && ids.has(current.toolSessionId) ? current.toolSessionId : tools[0]?.id,
-      referenceTargetId: current.referenceTargetId && terminals.some((terminal) => terminal.id === current.referenceTargetId && terminal.kind === "agent" && terminal.alive) ? current.referenceTargetId : undefined,
+      referenceTargetId: current.referenceTargetId && liveAgentIds.has(current.referenceTargetId) ? current.referenceTargetId : undefined,
     };
+  }),
+  setAcpSessions: (acpSessions) => set((current) => {
+    const scopedSessions = current.activeProjectId ? acpSessions.filter((session) => session.projectId === current.activeProjectId) : acpSessions;
+    const ptyAgents = current.terminals.filter((terminal) => terminal.kind === "agent");
+    const agentIds = new Set([...ptyAgents.map((agent) => agent.id), ...scopedSessions.map((session) => session.id)]);
+    const liveAgentIds = new Set([...ptyAgents.filter((agent) => agent.alive).map((agent) => agent.id), ...scopedSessions.filter((session) => session.status === "live" || session.status === "waiting").map((session) => session.id)]);
+    return {
+      acpSessions: scopedSessions,
+      focusedSessionId: current.focusedSessionId && agentIds.has(current.focusedSessionId) ? current.focusedSessionId : ptyAgents[0]?.id ?? scopedSessions[0]?.id,
+      pinnedSessionId: current.pinnedSessionId && agentIds.has(current.pinnedSessionId) ? current.pinnedSessionId : undefined,
+      referenceTargetId: current.referenceTargetId && liveAgentIds.has(current.referenceTargetId) ? current.referenceTargetId : undefined,
+    };
+  }),
+  updateAcpSession: (id, update) => set((current) => ({ acpSessions: current.acpSessions.map((session) => session.id === id ? { ...session, ...update } : session) })),
+  applyAcpEvent: (event) => set((current) => {
+    const next = applyAcpServerEvent({
+      projectId: current.activeProjectId,
+      sessions: current.acpSessions,
+      history: current.acpHistory,
+      lastSequences: current.acpSequences,
+      queued: current.acpQueued,
+    }, event);
+    const ptyAgents = current.terminals.filter((terminal) => terminal.kind === "agent");
+    const agentIds = new Set([...ptyAgents.map((agent) => agent.id), ...next.sessions.map((session) => session.id)]);
+    const liveAgentIds = new Set([...ptyAgents.filter((agent) => agent.alive).map((agent) => agent.id), ...next.sessions.filter((session) => session.status === "live" || session.status === "waiting").map((session) => session.id)]);
+    return {
+      acpSessions: next.sessions,
+      acpHistory: next.history,
+      acpSequences: next.lastSequences,
+      acpQueued: next.queued,
+      focusedSessionId: current.focusedSessionId && agentIds.has(current.focusedSessionId) ? current.focusedSessionId : ptyAgents[0]?.id ?? next.sessions[0]?.id,
+      pinnedSessionId: current.pinnedSessionId && agentIds.has(current.pinnedSessionId) ? current.pinnedSessionId : undefined,
+      referenceTargetId: current.referenceTargetId && liveAgentIds.has(current.referenceTargetId) ? current.referenceTargetId : undefined,
+    };
+  }),
+  setAcpDraft: (id, draft) => set((current) => ({ acpDrafts: { ...current.acpDrafts, [id]: draft } })),
+  updateAcpDraft: (id, update) => set((current) => ({ acpDrafts: { ...current.acpDrafts, [id]: { ...(current.acpDrafts[id] ?? { text: "", references: [] }), ...update } } })),
+  clearAcpDraft: (id) => set((current) => {
+    const acpDrafts = { ...current.acpDrafts };
+    delete acpDrafts[id];
+    return { acpDrafts };
   }),
   addTerminal: (terminal) => set((current) => ({ terminals: [...current.terminals, terminal], activeTerminalId: terminal.id })),
   updateTerminal: (id, update) => set((current) => ({ terminals: current.terminals.map((terminal) => terminal.id === id ? { ...terminal, ...update } : terminal) })),
@@ -204,17 +264,22 @@ export const useAppStore = create<AppState>((set) => ({
     set({ terminalCollapsed });
   },
   setTerminalMaximized: (terminalMaximized) => {
-    persistTerminalCollapsed(false);
-    set({ terminalMaximized, terminalCollapsed: false });
+    if (terminalMaximized) {
+      persistTerminalCollapsed(false);
+      set({ terminalMaximized: true, terminalCollapsed: false });
+      return;
+    }
+    set({ terminalMaximized: false });
   },
   setTerminalError: (terminalError) => set({ terminalError }),
   setPendingLocation: (pendingLocation) => set({ pendingLocation }),
-  setProjectSession: (input) => set({
+  setProjectSession: (input) => set((current) => ({
     activeProjectId: input.activeProjectId,
     openProjects: input.openProjects,
     knownProjects: input.knownProjects,
     restoreError: input.restoreError,
-  }),
+    ...(current.activeProjectId !== input.activeProjectId ? { acpHistory: {}, acpSequences: {}, acpQueued: {} } : {}),
+  })),
   stashActiveBag: () => set((current) => {
     if (!current.activeProjectId) return current;
     return { projectBags: { ...current.projectBags, [current.activeProjectId]: captureProjectBag(current) } };
@@ -234,6 +299,11 @@ export const useAppStore = create<AppState>((set) => ({
       focusedPaneId: bag.focusedPaneId,
       git: bag.git,
       terminals: bag.terminals,
+      acpSessions: bag.acpSessions,
+      acpHistory: bag.acpHistory,
+      acpDrafts: bag.acpDrafts,
+      acpSequences: {},
+      acpQueued: {},
       activeTerminalId: bag.activeTerminalId,
       referenceKit: bag.referenceKit,
       focusedSessionId: bag.focusedSessionId,
@@ -249,6 +319,8 @@ export const useAppStore = create<AppState>((set) => ({
     workspace: undefined,
     activeProjectId: undefined,
     ...emptyProjectBag(),
+    acpSequences: {},
+    acpQueued: {},
   }),
   removeProjectBag: (projectId) => set((current) => {
     const projectBags = { ...current.projectBags };

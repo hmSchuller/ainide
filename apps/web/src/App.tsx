@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import type { FileEntry, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
+import type { AcpSession, FileEntry, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
-import { closeProject, createPath, createTerminal, deleteFile, getGitStatus, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
+import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getAcpProviders, getGitStatus, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
 import { EditorSurface, language } from "./components/Editor";
 import { Explorer } from "./components/Explorer";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
@@ -26,12 +26,14 @@ import { lazygitTerminals, shouldStartLazygitSession } from "./terminal-ownershi
 type PaletteAction = { label: string; shortcut?: string; run: () => void };
 
 function fileName(path: string): string { return path.split(/[\\/]/).filter(Boolean).pop() ?? path; }
-function workspaceRelativePath(path: string, root: string): string {
-  const normalizedPath = path.replaceAll("\\", "/");
+function workspaceRelativePath(value: string, root: string): string | undefined {
+  const normalizedPath = value.replaceAll("\\", "/");
   const normalizedRoot = root.replaceAll("\\", "/").replace(/\/$/, "");
   if (normalizedPath === normalizedRoot) return "";
   if (normalizedPath.startsWith(`${normalizedRoot}/`)) return normalizedPath.slice(normalizedRoot.length + 1);
-  return normalizedPath.replace(/^\.\//, "");
+  if (normalizedPath.startsWith("/") || /^[a-zA-Z]:\//.test(normalizedPath)) return undefined;
+  const relative = normalizedPath.replace(/^\.\//, "");
+  return relative.split("/").some((part) => part === "..") ? undefined : relative;
 }
 function fuzzy(value: string, query: string): boolean {
   let position = 0;
@@ -56,6 +58,7 @@ export default function App() {
   const reviewScope = useAppStore((state) => state.review.scope);
   const directories = useAppStore((state) => state.directories);
   const terminals = useAppStore((state) => state.terminals);
+  const acpSessions = useAppStore((state) => state.acpSessions);
   const tabs = useAppStore((state) => state.tabs);
   const panes = useAppStore((state) => state.panes);
   const focusedPaneId = useAppStore((state) => state.focusedPaneId);
@@ -72,6 +75,8 @@ export default function App() {
   const setSelected = useAppStore((state) => state.setSelected);
   const setGit = useAppStore((state) => state.setGit);
   const setTerminals = useAppStore((state) => state.setTerminals);
+  const setAcpSessions = useAppStore((state) => state.setAcpSessions);
+  const applyAcpEvent = useAppStore((state) => state.applyAcpEvent);
   const addTerminal = useAppStore((state) => state.addTerminal);
   const setNotice = useAppStore((state) => state.setNotice);
   const setMode = useAppStore((state) => state.setMode);
@@ -80,6 +85,7 @@ export default function App() {
   const setPendingLocation = useAppStore((state) => state.setPendingLocation);
   const setTerminalError = useAppStore((state) => state.setTerminalError);
   const setTerminalCollapsed = useAppStore((state) => state.setTerminalCollapsed);
+  const setTerminalMaximized = useAppStore((state) => state.setTerminalMaximized);
   const [starting, setStarting] = useState(true);
   const [pickerBusy, setPickerBusy] = useState(false);
   const [pickerError, setPickerError] = useState<string>();
@@ -90,13 +96,14 @@ export default function App() {
   const [searchResults, setSearchResults] = useState<FileEntry[]>([]);
   const [addingProject, setAddingProject] = useState(false);
 
-  const applyLists = (result: Pick<ProjectMutationResponse, "activeProjectId" | "openProjects" | "knownProjects">, restoreError?: string) => {
+  const applyLists = (result: Pick<ProjectMutationResponse, "activeProjectId" | "openProjects" | "knownProjects"> & { acpSessions?: AcpSession[] }, restoreError?: string) => {
     useAppStore.getState().setProjectSession({
       activeProjectId: result.activeProjectId ?? undefined,
       openProjects: result.openProjects,
       knownProjects: result.knownProjects,
       restoreError,
     });
+    setAcpSessions(result.acpSessions ?? []);
   };
 
   const loadExplorerAndGit = async (nextToken: string) => {
@@ -181,6 +188,7 @@ export default function App() {
       return;
     }
     await showProject(result.workspace, result.activeProjectId, nextToken, result.snapshot, reuseBag);
+    setAcpSessions(result.acpSessions ?? []);
   };
 
   const openFromPath = async (path: string, nextToken: string) => {
@@ -215,6 +223,7 @@ export default function App() {
         if (session.restoreError) setPickerError(session.restoreError);
         if (session.workspace && session.activeProjectId) {
           await showProject(session.workspace, session.activeProjectId, nextToken, session.snapshot, false);
+          setAcpSessions(session.acpSessions ?? []);
         }
       } catch (error) {
         setPickerError(error instanceof Error ? error.message : "Could not connect to the ainide server");
@@ -245,6 +254,30 @@ export default function App() {
     // Events are reconnected when the session token changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    let disposed = false;
+    let socket: WebSocket | undefined;
+    let retry: number | undefined;
+    const connect = () => {
+      if (disposed) return;
+      socket = new WebSocket(acpEventsUrl(token));
+      socket.onmessage = (event) => {
+        const message = parseAcpEvent(String(event.data));
+        if (message) applyAcpEvent(message);
+      };
+      socket.onclose = () => {
+        if (!disposed) retry = window.setTimeout(connect, 1_000);
+      };
+    };
+    connect();
+    return () => {
+      disposed = true;
+      if (retry !== undefined) window.clearTimeout(retry);
+      socket?.close();
+    };
+  }, [token, applyAcpEvent]);
 
   useEffect(() => {
     if (!token || !workspace || !activeProjectId) return;
@@ -325,6 +358,10 @@ export default function App() {
 
   const openReference = (path: string, line: number, column?: number) => {
     const relativePath = workspace ? workspaceRelativePath(path, workspace.rootPath) : path;
+    if (!relativePath) {
+      setNotice("Provider location is outside the active workspace", "error");
+      return;
+    }
     path = relativePath;
     const current = useAppStore.getState();
     const paneId = findPaneForPath(current.panes, path) ?? current.focusedPaneId;
@@ -523,10 +560,28 @@ export default function App() {
   };
 
   const newAgent = () => {
-    const count = useAppStore.getState().terminals.filter((terminal) => terminal.kind === "agent").length;
+    const state = useAppStore.getState();
+    const count = state.terminals.filter((terminal) => terminal.kind === "agent").length + state.acpSessions.length;
     const title = window.prompt("Name this agent session", count === 0 ? "Implement" : count === 1 ? "Plan next task" : `Agent ${count + 1}`);
     if (title === null) return;
-    void newTerminal("agent", title.trim() || undefined);
+    const cleanTitle = title.trim() || undefined;
+    if (!token) return;
+    void getAcpProviders(token).then(async (providers) => {
+      if (!providers.length) {
+        await newTerminal("agent", cleanTitle);
+        return;
+      }
+      const selection = window.prompt(`Provider (${providers.map((item) => item.id).join(", ")}; type pty for terminal)`, providers[0]?.id);
+      if (selection?.trim().toLowerCase() === "pty") {
+        await newTerminal("agent", cleanTitle);
+        return;
+      }
+      const selected = providers.find((provider) => provider.id === selection?.trim());
+      if (!selected) return;
+      const created = await createAcpSession(selected.id, cleanTitle ?? `Agent ${count + 1}`, token);
+      setAcpSessions([...useAppStore.getState().acpSessions, created]);
+      useAppStore.getState().setFocusedSession(created.id);
+    }).catch((error) => setNotice(error instanceof Error ? error.message : "ACP agent could not be started", "error"));
   };
 
   const loadedFiles = useMemo(() => Object.values(directories).flatMap((directory) => directory.entries).filter((entry, index, all) => entry.type === "file" && all.findIndex((other) => other.path === entry.path) === index), [directories]);
@@ -558,12 +613,13 @@ export default function App() {
       if (event.shiftKey && event.key.toLowerCase() === "p") { event.preventDefault(); setPaletteOpen(true); setQuickOpen(false); setQuery(""); }
       else if (!event.shiftKey && event.key.toLowerCase() === "p") { event.preventDefault(); setQuickOpen(true); setPaletteOpen(false); setQuery(""); }
        else if (event.key.toLowerCase() === "s") { event.preventDefault(); const activePath = panes[focusedPaneId].activePath; const tab = tabs.find((item) => item.path === activePath); if (tab) void saveFile(tab); }
-       else if (event.key.toLowerCase() === "j") {
-         event.preventDefault();
-         const next = !useAppStore.getState().terminalCollapsed;
-         setTerminalCollapsed(next);
-         useAppStore.setState({ terminalMaximized: false });
-       }
+        else if (event.key.toLowerCase() === "j") {
+          event.preventDefault();
+          const state = useAppStore.getState();
+          const next = !state.terminalCollapsed;
+          if (state.terminalMaximized) setTerminalMaximized(false);
+          setTerminalCollapsed(next);
+        }
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
@@ -606,7 +662,7 @@ export default function App() {
             else if (entry === "lazygit") void switchToLazyGit();
             else setMode(entry);
           };
-          return <button key={entry} className={active ? "active" : ""} role="tab" aria-selected={active} onClick={onClick}>{label}{entry === "agents" && <span className="mode-count">{terminals.filter((terminal) => terminal.kind === "agent" && terminal.alive).length}</span>}</button>;
+           return <button key={entry} className={active ? "active" : ""} role="tab" aria-selected={active} onClick={onClick}>{label}{entry === "agents" && <span className="mode-count">{terminals.filter((terminal) => terminal.kind === "agent" && terminal.alive).length + acpSessions.filter((session) => session.status === "live" || session.status === "waiting").length}</span>}</button>;
         })}</div>
         <div className="top-actions"><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
@@ -640,7 +696,7 @@ export default function App() {
              />
              {shouldShowReferenceDock(referenceKit.length) && <ReferenceDock />}
            </div>
-           <div className="mode-surface" hidden={mode !== "agents"}><AgentWorkbench onNewAgent={newAgent} onOpenReference={openReference} /></div>
+            <div className="mode-surface" hidden={mode !== "agents"}><AgentWorkbench onNewAgent={newAgent} onOpenReference={openReference} /></div>
            <div className="mode-surface" hidden={mode !== "review"}>
             <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />
           </div>

@@ -85,4 +85,32 @@ describe("project UI bags", () => {
     expect(snapshot.mode).toBe("lazygit");
     expect(snapshot.terminalKinds).toEqual(["lazygit", "shell"]);
   });
+
+  it("keeps ACP history and drafts in the project bag but persists only safe descriptors", () => {
+    const bag = emptyProjectBag();
+    bag.acpSessions = [{
+      id: "acp-1",
+      title: "Implement",
+      projectId: "/proj-a",
+      providerId: "cursor",
+      providerLabel: "Cursor",
+      acpSessionId: "provider-1",
+      authMethods: [],
+      status: "live",
+      capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
+      configOptions: [],
+      pendingRequests: [],
+      activePrompt: false,
+      resumability: "resumable",
+    }];
+    bag.acpHistory["acp-1"] = [{ type: "message", id: "message-1", role: "agent", text: "history" }];
+    bag.acpDrafts["acp-1"] = { text: "draft", references: [{ id: "ref-1", path: "src/a.ts", startLine: 2, endLine: 3, wholeFile: false, content: "code", language: "typescript" }] };
+    const captured = captureProjectBag(bag);
+    expect(captured.acpHistory["acp-1"]).toEqual([{ type: "message", id: "message-1", role: "agent", text: "history" }]);
+    expect(captured.acpDrafts["acp-1"]?.references[0]?.startLine).toBe(2);
+    const snapshot = snapshotFromBag({ rootPath: "/proj-a", name: "a" }, captured);
+    expect(snapshot.acpSessions).toEqual([{ id: "acp-1", title: "Implement", providerId: "cursor", acpSessionId: "provider-1", resumability: "resumable" }]);
+    expect(JSON.stringify(snapshot)).not.toContain("history");
+    expect(JSON.stringify(snapshot)).not.toContain("draft");
+  });
 });

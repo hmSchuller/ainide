@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { parseAgentSessionDescriptors, parseAppMode, type ProjectSessionSnapshot, type SessionSnapshot, type TerminalKind } from "@ainide/shared";
+import { parseAcpSessionDescriptors, parseAgentSessionDescriptors, parseAppMode, type ProjectSessionSnapshot, type SessionSnapshot, type TerminalKind } from "@ainide/shared";
 import { sessionsFilePath } from "./config.js";
 
 const SESSION_VERSION = 1;
@@ -43,6 +43,7 @@ export function sanitizeSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
     ...(snapshot.activeRootPath ? { activeRootPath: snapshot.activeRootPath } : {}),
     projects: snapshot.projects.map((project) => {
       const agentSessions = parseAgentSessionDescriptors(project.agentSessions);
+      const acpSessions = parseAcpSessionDescriptors(project.acpSessions);
       return {
         rootPath: project.rootPath,
         name: project.name,
@@ -56,6 +57,7 @@ export function sanitizeSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
         mode: parseAppMode(project.mode),
         terminalKinds: project.terminalKinds.filter((kind) => TERMINAL_KINDS.has(kind)),
         ...(agentSessions ? { agentSessions } : {}),
+        ...(acpSessions ? { acpSessions } : {}),
       };
     }),
   };
@@ -70,6 +72,7 @@ function parseProjectSnapshot(value: unknown): ProjectSessionSnapshot | undefine
     ? record.terminalKinds.filter((kind): kind is TerminalKind => typeof kind === "string" && TERMINAL_KINDS.has(kind as TerminalKind))
     : [];
   const agentSessions = parseAgentSessionDescriptors(record.agentSessions);
+  const acpSessions = parseAcpSessionDescriptors(record.acpSessions);
   return {
     rootPath: record.rootPath,
     name: typeof record.name === "string" && record.name ? record.name : path.basename(record.rootPath) || record.rootPath,
@@ -80,6 +83,7 @@ function parseProjectSnapshot(value: unknown): ProjectSessionSnapshot | undefine
     mode: parseAppMode(record.mode),
     terminalKinds,
     ...(agentSessions ? { agentSessions } : {}),
+    ...(acpSessions ? { acpSessions } : {}),
   };
 }
 

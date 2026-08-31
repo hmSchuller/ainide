@@ -2,7 +2,7 @@
 
 > A local-first browser cockpit for editing code, running real terminals, supervising local agents, and reviewing Git changes.
 
-ainide keeps the human editing surface and the AI interface close together without adding a hosted service or a new agent protocol. Monaco is the editing surface; the terminal is the AI interface; Git and Difit provide review. The agent is deliberately just another local PTY process.
+ainide keeps the human editing surface and the AI interface close together without adding a hosted service. Monaco is the editing surface; ACP-backed conversations and the terminal are the AI interfaces; Git and Difit provide review. Agents remain local processes owned by the ainide server.
 
 ainide is an early-stage `0.1.0` project intended for one local user. It runs commands with your normal user permissions and is not a remote IDE, sandbox, or collaboration service.
 
@@ -11,7 +11,7 @@ ainide is an early-stage `0.1.0` project intended for one local user. It runs co
 - **Edit**: Browse a workspace, open files in Monaco, use two editor panes, drag tabs between panes, and search file paths.
 - **Safe editing**: Text buffers auto-save after a short pause, manual save is available, and external changes are surfaced as conflicts instead of silently replacing dirty work.
 - **Review**: Launch an optional local Difit review for the working tree, staged changes, the last commit, or the current branch versus `main`.
-- **Agents**: Run multiple named agent sessions, focus one session, or pin a second session for side-by-side observation.
+- **Agents**: Run multiple named PTY or ACP agent sessions, focus one session, or pin a second session for side-by-side observation.
 - **LazyGit**: Open a dedicated full-height Lazygit surface for interactive Git work in the active project.
 - **Edit utilities**: Use real shell and custom PTY sessions from Edit mode through xterm.js.
 - **Reference kit**: Capture a selection or whole file, copy it as plain text with path and line provenance, or explicitly insert it into a selected live agent without submitting it.
@@ -62,8 +62,10 @@ ainide detects these commands on the local `PATH`:
 | `difit` | Review mode and embedded diffs | No |
 | `lazygit` | LazyGit mode and interactive Git terminal | No |
 | Your agent CLI | Agent PTY sessions | No |
+| Cursor `agent` | Cursor ACP sessions with `agent acp` | No |
+| OpenCode `opencode` | OpenCode ACP sessions with `opencode acp` | No |
 
-The configured agent is not supplied by ainide. Any locally installed command can be used, including a command with arguments. Review mode requires both a Git repository and the `difit` CLI. The `branch vs main` scope additionally requires a local `main` branch.
+The configured PTY agent is not supplied by ainide. Any locally installed command can be used, including a command with arguments. ACP providers are configured as direct command and argument pairs; ainide does not install or proxy them through a shell. Review mode requires both a Git repository and the `difit` CLI. The `branch vs main` scope additionally requires a local `main` branch.
 
 ## Using ainide
 
@@ -81,7 +83,7 @@ Open files from the workspace explorer or use `Cmd/Ctrl+P` to search file paths.
 
 ### Run agents
 
-Use **Agents** mode to create and name multiple agent sessions. Each session is a real PTY started in the active workspace using the configured agent command. Switching modes or projects does not intentionally terminate live PTYs.
+Use **Agents** mode to create and name multiple agent sessions. PTY sessions are real terminals started in the active workspace using the configured agent command. ACP sessions use a configured local provider such as `agent acp` or `opencode acp` and expose structured conversation, tool activity, permissions, and provider-advertised configuration. Switching modes or projects does not intentionally terminate live sessions.
 
 The editor and explorer can add files or selected lines to the reference kit. Choose a live agent as the target, then use **Paste reference kit** to insert the captured context into its terminal. Insertion is explicit, sends no trailing newline, and does not submit the agent prompt. **Copy kit** remains available as a clipboard fallback.
 
@@ -117,7 +119,11 @@ Set `AINIDE_CONFIG` to use another path. Example:
 ```json
 {
   "agentCommand": "claude",
-  "defaultShell": "/bin/zsh"
+  "defaultShell": "/bin/zsh",
+  "acpAgents": [
+    { "id": "cursor", "label": "Cursor", "command": "agent", "args": ["acp"] },
+    { "id": "opencode", "label": "OpenCode", "command": "opencode", "args": ["acp"] }
+  ]
 }
 ```
 
@@ -166,6 +172,7 @@ npm test            # Run server and frontend tests
 - **Review is unavailable**: Confirm the workspace is a Git repository and that `difit` is installed and available on `PATH`. The branch-vs-main scope needs a local `main` branch.
 - **Lazygit will not start**: Install `lazygit`, then open LazyGit mode or retry from the unavailable state. Shell utilities remain available from Edit mode.
 - **The agent terminal is empty or unavailable**: Confirm the configured agent command is installed and executable from the server's environment.
+- **An ACP provider will not start**: Confirm its configured command and arguments are installed and executable from the server's environment. Authentication remains provider-local and ACP model options appear only after the provider initializes.
 - **A project did not restore**: Session restoration is best effort. Missing directories or unavailable optional tools are reported while known projects remain available in the picker.
 - **Search does not find code text**: File search currently matches names and paths; it does not search file contents.
 - **PTY startup fails**: `node-pty` is a native dependency; reinstall dependencies with `npm install` and verify that a local shell is available.

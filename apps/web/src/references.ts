@@ -1,3 +1,5 @@
+import type { AcpPromptContext } from "@ainide/shared";
+
 export interface CodeSelection {
   startLineNumber: number;
   endLineNumber: number;
@@ -97,6 +99,20 @@ export function serializeReference(item: ReferenceItem): string {
 
 export function serializeReferenceKit(items: ReferenceItem[]): string {
   return items.map(serializeReference).join("\n\n");
+}
+
+export function appendReferenceItems(current: ReferenceItem[], additions: ReferenceItem[]): ReferenceItem[] {
+  return [...current, ...additions.filter((item) => !current.some((reference) => reference.id === item.id))];
+}
+
+export function promptContextFromReferences(items: ReferenceItem[]): AcpPromptContext[] {
+  return items.map((reference) => ({
+    path: reference.path,
+    content: reference.content,
+    language: reference.language,
+    ...(reference.startLine ? { startLine: reference.startLine } : {}),
+    ...(reference.endLine ? { endLine: reference.endLine } : {}),
+  }));
 }
 
 export async function copyText(text: string, writeText: (value: string) => Promise<void> = (value) => navigator.clipboard.writeText(value)): Promise<ClipboardResult> {

@@ -11,6 +11,7 @@ describe("Vite backend proxy", () => {
     const config = createViteConfig();
     expect(proxyFor()["/api"]).toBe("http://127.0.0.1:43127");
     expect(proxyFor()["/events"]).toBe("ws://127.0.0.1:43127");
+    expect(proxyFor()["/acp-events"]).toBe("ws://127.0.0.1:43127");
     expect(proxyFor()["/terminal"]).toBe("ws://127.0.0.1:43127");
     expect("port" in config.server).toBe(false);
   });
@@ -19,6 +20,7 @@ describe("Vite backend proxy", () => {
     const proxy = proxyFor("45678");
     expect(proxy["/api"]).toBe("http://127.0.0.1:45678");
     expect(proxy["/events"]).toBe("ws://127.0.0.1:45678");
+    expect(proxy["/acp-events"]).toBe("ws://127.0.0.1:45678");
     expect(proxy["/terminal"]).toBe("ws://127.0.0.1:45678");
   });
 });

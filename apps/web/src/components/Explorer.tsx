@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FileEntry, GitFileStatusKind } from "@ainide/shared";
-import { listFiles } from "../api";
+import { ApiError, listFiles } from "../api";
 import { explorerMenuItemsForEntry } from "../explorer-actions";
 import { useAppStore } from "../store";
 import { ContextMenu } from "./ContextMenu";
@@ -27,6 +27,10 @@ const statusLetters: Record<GitFileStatusKind, string> = {
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function isMissingDirectoryError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 400 && /no such file|not a directory/i.test(error.message);
 }
 
 export function Explorer({
@@ -59,6 +63,12 @@ export function Explorer({
     try {
       setDirectory(path, { entries: await listFiles(path, state.token), loading: false });
     } catch (error) {
+      const current = useAppStore.getState();
+      if (path && current.expanded[path] && isMissingDirectoryError(error)) {
+        toggleDirectory(path);
+        setDirectory(path, { entries: [], loading: false });
+        return;
+      }
       setDirectory(path, { entries: [], loading: false, error: error instanceof Error ? error.message : "Unable to list files" });
     }
   };

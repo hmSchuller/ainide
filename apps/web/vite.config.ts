@@ -10,6 +10,7 @@ export function createViteConfig(portValue?: string) {
       proxy: {
         "/api": `http://127.0.0.1:${backendPort}`,
         "/events": `ws://127.0.0.1:${backendPort}`,
+        "/acp-events": `ws://127.0.0.1:${backendPort}`,
         "/terminal": `ws://127.0.0.1:${backendPort}`,
       },
     },

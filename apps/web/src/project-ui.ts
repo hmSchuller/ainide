@@ -1,4 +1,4 @@
-import type { GitStatus, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace, WorkspaceEvent } from "@ainide/shared";
+import type { AcpActivity, AcpSession, GitStatus, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace, WorkspaceEvent } from "@ainide/shared";
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, ReviewState } from "./types";
 import type { ReferenceItem } from "./references";
 
@@ -13,6 +13,9 @@ export interface ProjectUiBag {
   focusedPaneId: EditorPaneId;
   git?: GitStatus;
   terminals: TerminalSession[];
+  acpSessions: AcpSession[];
+  acpHistory: Record<string, AcpActivity[]>;
+  acpDrafts: Record<string, AcpPromptDraft>;
   activeTerminalId?: string;
   referenceKit: ReferenceItem[];
   focusedSessionId?: string;
@@ -21,6 +24,11 @@ export interface ProjectUiBag {
   referenceTargetId?: string;
   recentChanges: Record<string, number>;
   review: ReviewState;
+}
+
+export interface AcpPromptDraft {
+  text: string;
+  references: ReferenceItem[];
 }
 
 export interface ProjectUiFields extends ProjectUiBag {
@@ -42,6 +50,9 @@ export function emptyProjectBag(): ProjectUiBag {
     secondaryOpen: false,
     focusedPaneId: "primary",
     terminals: [],
+    acpSessions: [],
+    acpHistory: {},
+    acpDrafts: {},
     referenceKit: [],
     recentChanges: {},
     review: { loading: false, scope: "working-tree" },
@@ -63,6 +74,15 @@ export function captureProjectBag(state: ProjectUiBag): ProjectUiBag {
     focusedPaneId: state.focusedPaneId,
     git: state.git,
     terminals: [...state.terminals],
+    acpSessions: state.acpSessions.map((session) => ({
+      ...session,
+      capabilities: { ...session.capabilities },
+      authMethods: session.authMethods.map((method) => ({ ...method })),
+      configOptions: session.configOptions.map((option) => ({ ...option, ...(option.choices ? { choices: option.choices.map((choice) => ({ ...choice })) } : {}) })),
+      pendingRequests: [...session.pendingRequests],
+    })),
+    acpHistory: Object.fromEntries(Object.entries(state.acpHistory).map(([id, history]) => [id, history.map((activity) => ({ ...activity }))])),
+    acpDrafts: Object.fromEntries(Object.entries(state.acpDrafts).map(([id, draft]) => [id, { text: draft.text, references: draft.references.map((reference) => ({ ...reference })) }])),
     activeTerminalId: state.activeTerminalId,
     referenceKit: [...state.referenceKit],
     focusedSessionId: state.focusedSessionId,
@@ -94,6 +114,13 @@ export function applyDiskToTabs(
 }
 
 export function snapshotFromBag(workspace: Workspace, bag: ProjectUiBag): ProjectSessionSnapshot {
+  const acpSessions = bag.acpSessions.flatMap((session) => session.acpSessionId ? [{
+    id: session.id,
+    title: session.title,
+    providerId: session.providerId,
+    acpSessionId: session.acpSessionId,
+    resumability: session.resumability === "resumable" || session.resumability === "restored" ? "resumable" as const : "non_resumable" as const,
+  }] : []);
   return {
     rootPath: workspace.rootPath,
     name: workspace.name,
@@ -107,6 +134,7 @@ export function snapshotFromBag(workspace: Workspace, bag: ProjectUiBag): Projec
     mode: bag.mode,
     terminalKinds: [...new Set(bag.terminals.filter((terminal) => terminal.alive && terminal.kind !== "agent").map((terminal) => terminal.kind))],
     agentSessions: bag.terminals.filter((terminal) => terminal.kind === "agent").map((terminal) => ({ title: terminal.title })),
+    ...(acpSessions.length ? { acpSessions } : {}),
   };
 }
 

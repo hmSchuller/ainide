@@ -162,7 +162,7 @@ export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelP
       </div>
       <div className="terminal-controls">
         <button onClick={() => setTerminalMaximized(!maximized)} title="Maximize terminal">{maximized ? "⤢" : "⤡"}</button>
-        <button onClick={() => { setTerminalCollapsed(!collapsed); if (!collapsed) setTerminalMaximized(false); }} title="Collapse terminal">{collapsed ? "⌃" : "⌄"}</button>
+        <button onClick={() => { const next = !collapsed; if (maximized) setTerminalMaximized(false); setTerminalCollapsed(next); }} title="Collapse terminal">{collapsed ? "⌃" : "⌄"}</button>
       </div>
     </header>
     {!collapsed && <div className="terminal-body">

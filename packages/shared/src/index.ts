@@ -53,6 +53,163 @@ export interface AgentSessionDescriptor {
   title: string;
 }
 
+export interface AcpSessionDescriptor {
+  id: string;
+  title: string;
+  providerId: string;
+  acpSessionId: string;
+  resumability: "resumable" | "non_resumable";
+}
+
+export interface AcpProviderDescriptor {
+  id: string;
+  label: string;
+}
+
+export interface AcpAuthMethod {
+  id: string;
+  label: string;
+  type: "agent" | "terminal";
+  description?: string;
+}
+
+export type AcpSessionStatus =
+  | "connecting"
+  | "auth_required"
+  | "live"
+  | "waiting"
+  | "disconnected"
+  | "exited"
+  | "failed"
+  | "non_resumable";
+
+export interface AcpSessionCapabilities {
+  canCancel: boolean;
+  canClose: boolean;
+  canLoad: boolean;
+  canResume: boolean;
+  canSetConfig: boolean;
+  canReadTextFile: boolean;
+  canWriteTextFile: boolean;
+  canUseTerminal: boolean;
+  canRequestPermission: boolean;
+  canElicit: boolean;
+}
+
+export interface AcpConfigOptionChoice {
+  value: string;
+  label: string;
+}
+
+export interface AcpConfigOption {
+  id: string;
+  label: string;
+  type: "select" | "boolean";
+  category?: string;
+  currentValue?: string | boolean;
+  choices?: AcpConfigOptionChoice[];
+}
+
+export interface AcpPermissionOption {
+  id: string;
+  label: string;
+  kind?: string;
+}
+
+export interface AcpPermissionRequest {
+  requestId: string;
+  title: string;
+  description?: string;
+  options: AcpPermissionOption[];
+}
+
+export interface AcpElicitationField {
+  id: string;
+  label: string;
+  type: "text" | "number" | "boolean" | "select";
+  required?: boolean;
+  choices?: AcpConfigOptionChoice[];
+}
+
+export interface AcpElicitationRequest {
+  requestId: string;
+  title: string;
+  description?: string;
+  fields: AcpElicitationField[];
+}
+
+export type AcpPendingRequest =
+  | { type: "permission"; request: AcpPermissionRequest }
+  | { type: "elicitation"; request: AcpElicitationRequest };
+
+export interface AcpSession {
+  id: string;
+  title: string;
+  projectId: string;
+  providerId: string;
+  providerLabel: string;
+  acpSessionId?: string;
+  authMethods: AcpAuthMethod[];
+  status: AcpSessionStatus;
+  capabilities: AcpSessionCapabilities;
+  configOptions: AcpConfigOption[];
+  pendingRequests: AcpPendingRequest[];
+  activePrompt: boolean;
+  resumability: "unknown" | "resumable" | "non_resumable" | "restored";
+  error?: string;
+}
+
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+export type AcpActivity =
+  | { type: "message"; id: string; role: "user" | "agent"; text: string; format?: "plain" | "markdown"; thought?: boolean }
+  | { type: "tool_call"; id: string; title: string; status: "running" | "completed" | "failed" | "cancelled"; input?: string; output?: string }
+  | { type: "plan"; id: string; text: string; status?: "pending" | "running" | "completed" | "failed" }
+  | { type: "location"; path: string; line?: number; column?: number }
+  | { type: "diff"; id: string; path?: string; diff: string }
+  | { type: "terminal"; id: string; output?: string; status?: "running" | "exited" | "failed"; exitCode?: number | null }
+  | { type: "usage"; inputTokens?: number; outputTokens?: number; totalTokens?: number }
+  | { type: "turn"; status: "completed" | "failed" | "cancelled"; message?: string }
+  | { type: "unknown"; name: string; data: JsonValue };
+
+export type AcpSessionEvent =
+  | { type: "status"; session: AcpSession }
+  | { type: "activity"; sessionId: string; activity: AcpActivity }
+  | { type: "config"; sessionId: string; options: AcpConfigOption[] }
+  | { type: "request"; sessionId: string; request: AcpPendingRequest }
+  | { type: "request_resolved"; sessionId: string; requestId: string };
+
+export type AcpServerEvent =
+  | { type: "snapshot"; projectId: string; sessions: AcpSession[]; history: Record<string, AcpActivity[]>; sequence: number; sequences?: Record<string, number> }
+  | { type: "session_event"; projectId: string; sessionId: string; sequence: number; event: AcpSessionEvent }
+  | { type: "session_removed"; projectId: string; sessionId: string; sequence: number };
+
+export interface AcpPromptContext {
+  path: string;
+  content: string;
+  language?: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+export interface AcpPromptRequest {
+  text: string;
+  context?: AcpPromptContext[];
+}
+
+export type AcpElicitationValue = string | number | boolean | string[];
+
+export type AcpRequestResponse =
+  | { outcome: "selected"; optionId: string }
+  | { outcome: "cancelled" }
+  | { action: "accept"; content?: Record<string, AcpElicitationValue> }
+  | { action: "decline" | "cancel" };
+
+export interface AcpSessionDetail {
+  session: AcpSession;
+  history: AcpActivity[];
+}
+
 export type TerminalClientMessage =
   | { type: "input"; sessionId: string; data: string }
   | { type: "resize"; sessionId: string; cols: number; rows: number }
@@ -98,6 +255,7 @@ export interface ProjectSessionSnapshot {
   mode: AppMode;
   terminalKinds: TerminalKind[];
   agentSessions?: AgentSessionDescriptor[];
+  acpSessions?: AcpSessionDescriptor[];
 }
 
 export interface SessionSnapshot {
@@ -113,6 +271,7 @@ export interface SessionBootstrap {
   activeProjectId: string | null;
   workspace: Workspace | null;
   snapshot?: ProjectSessionSnapshot;
+  acpSessions?: AcpSession[];
   restoreError?: string;
 }
 
@@ -169,4 +328,25 @@ export function parseAgentSessionDescriptors(value: unknown): AgentSessionDescri
     const cleanTitle = title.trim();
     return cleanTitle && cleanTitle.length <= 80 ? [{ title: cleanTitle }] : [];
   });
+}
+
+export function parseAcpSessionDescriptors(value: unknown): AcpSessionDescriptor[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    const id = cleanDescriptorValue(record.id);
+    const title = cleanDescriptorValue(record.title);
+    const providerId = cleanDescriptorValue(record.providerId);
+    const acpSessionId = cleanDescriptorValue(record.acpSessionId);
+    const resumability = record.resumability === "resumable" || record.resumability === "non_resumable" ? record.resumability : undefined;
+    if (!id || !title || !providerId || !acpSessionId || !resumability) return [];
+    return [{ id, title, providerId, acpSessionId, resumability }];
+  });
+}
+
+function cleanDescriptorValue(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = value.trim();
+  return clean && clean.length <= 200 ? clean : undefined;
 }
