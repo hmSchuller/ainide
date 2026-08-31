@@ -18,6 +18,7 @@ vi.mock("./TerminalPanel", () => ({ TerminalView: () => null }));
 
 import type { AcpSession, TerminalSession } from "@ainide/shared";
 import { useAppStore } from "../store";
+import { ACP_SEND_LABEL } from "../acp-composer";
 import { AgentWorkbench, combinedAgentEntries } from "./AgentWorkbench";
 
 const capabilities = { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true };
@@ -40,6 +41,10 @@ describe("AgentWorkbench", () => {
   it("does not show an agent retained by another project", () => {
     const hidden: TerminalSession = { id: "hidden", title: "Hidden", command: "agent", cwd: "/other", alive: true, kind: "agent", projectId: "/other" };
     expect(combinedAgentEntries([hidden], [], "/project")).toEqual([]);
+  });
+
+  it("advertises Enter as the primary ACP send shortcut", () => {
+    expect(ACP_SEND_LABEL).toBe("Send Enter");
   });
 
 });
