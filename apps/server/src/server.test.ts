@@ -14,6 +14,23 @@ async function tempProject(prefix: string): Promise<string> {
   return root;
 }
 
+function fakeAcpProviderScript(): string {
+  return [
+    "const readline = require('node:readline');",
+    "const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');",
+    "const options = (value) => [{ type: 'boolean', id: 'thinking', name: 'Thinking', currentValue: value === undefined ? true : value }];",
+    "const rl = readline.createInterface({ input: process.stdin });",
+    "rl.on('line', (line) => {",
+    "  const message = JSON.parse(line);",
+    "  if (message.method === 'initialize') send(message.id, { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {} } }, authMethods: [] });",
+    "  else if (message.method === 'session/new') send(message.id, { sessionId: 'provider-session', configOptions: options() });",
+    "  else if (message.method === 'session/load') send(message.id, { configOptions: options() });",
+    "  else if (message.method === 'session/set_config_option') send(message.id, { configOptions: options(message.params.value) });",
+    "  else if (message.method === 'session/close') send(message.id, {});",
+    "});",
+  ].join("\n");
+}
+
 async function withServer(run: (server: AinideServer, sessionsPath: string) => Promise<void>, sessionsPath?: string, configPath?: string): Promise<void> {
   const filePath = sessionsPath ?? path.join(await mkdtemp(path.join(os.tmpdir(), "ainide-api-")), "sessions.json");
   const previous = process.env.AINIDE_SESSIONS;
@@ -226,6 +243,41 @@ describe("project HTTP API", () => {
       expect((await server.app.inject({ method: "GET", url: "/api/terminals", headers })).json()).toEqual([expect.objectContaining({ id: terminalId, title: "Renamed" })]);
       expect(other.json().activeProjectId).not.toBe(firstId);
     });
+  });
+
+  it("persists ACP provider preferences and reapplies them to a new session after restart", async () => {
+    const root = await tempProject("ainide-api-acp-preference-");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-api-acp-preference-snap-"));
+    const sessionsPath = path.join(dir, "sessions.json");
+    const configPath = path.join(dir, "config.json");
+    await writeFile(configPath, JSON.stringify({ acpAgents: [{ id: "fake", label: "Fake ACP", command: process.execPath, args: ["-e", fakeAcpProviderScript()] }] }));
+
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      const created = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers, payload: { providerId: "fake", title: "First" } });
+      expect(created.statusCode).toBe(200);
+      const sessionId = created.json().id as string;
+      const changed = await server.app.inject({ method: "POST", url: `/api/acp/sessions/${sessionId}/config`, headers, payload: { configId: "thinking", value: false } });
+      expect(changed.statusCode).toBe(200);
+      expect(changed.json().options[0].currentValue).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      const debounced = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(sessionsPath, "utf8"))) as { acpProviderPreferences?: unknown };
+      expect(debounced.acpProviderPreferences).toEqual([{ providerId: "fake", values: { thinking: false } }]);
+    }, sessionsPath, configPath);
+
+    const saved = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(sessionsPath, "utf8"))) as { acpProviderPreferences?: unknown };
+    expect(saved.acpProviderPreferences).toEqual([{ providerId: "fake", values: { thinking: false } }]);
+
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      expect(server.acp.list(server.projects.activeId)).toHaveLength(1);
+      const bootstrap = await server.app.inject({ method: "GET", url: "/api/session" });
+      expect(bootstrap.json().snapshot).not.toHaveProperty("acpProviderPreferences");
+      const created = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers, payload: { providerId: "fake", title: "Second" } });
+      expect(created.statusCode).toBe(200);
+      expect(created.json().configOptions[0].currentValue).toBe(false);
+    }, sessionsPath, configPath);
   });
 
   it("writes activeRootPath when switching projects", async () => {

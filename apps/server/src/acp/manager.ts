@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
+import { parseAcpProviderPreferences } from "@ainide/shared";
 import type {
   AcpActivity,
   AcpAuthMethod,
   AcpConfigOption,
+  AcpProviderPreference,
+  AcpProviderPreferenceValue,
   AcpElicitationRequest,
   AcpPendingRequest,
   AcpPromptRequest,
@@ -46,6 +49,8 @@ export interface AcpSessionManagerOptions {
   config: AinideConfig;
   onEvent: (event: AcpServerEvent) => void;
   onPersistenceChange?: (projectId: string, descriptors: AcpSessionDescriptor[]) => void | Promise<void>;
+  initialPreferences?: AcpProviderPreference[];
+  onPreferencesChange?: (preferences: AcpProviderPreference[]) => void | Promise<void>;
   resources?: AcpResourceHandlers;
   maxHistoryItems?: number;
 }
@@ -96,10 +101,12 @@ export class AcpSessionError extends Error {
 
 export class AcpSessionManager {
   private readonly sessions = new Map<string, LiveAcpSession>();
+  private readonly providerPreferenceValues = new Map<string, Map<string, AcpProviderPreferenceValue>>();
   private readonly maxHistoryItems: number;
 
   constructor(private readonly options: AcpSessionManagerOptions) {
     this.maxHistoryItems = options.maxHistoryItems ?? 2_000;
+    for (const preference of parseAcpProviderPreferences(options.initialPreferences) ?? []) this.providerPreferenceValues.set(preference.providerId, new Map(Object.entries(preference.values)));
   }
 
   providers(): AcpProviderDescriptor[] {
@@ -144,6 +151,10 @@ export class AcpSessionManager {
         const descriptor = descriptorFor(record);
         return descriptor ? [descriptor] : [];
       });
+  }
+
+  providerPreferences(): AcpProviderPreference[] {
+    return [...this.providerPreferenceValues.entries()].map(([providerId, values]) => ({ providerId, values: Object.fromEntries(values) }));
   }
 
   async create(input: { projectId: string; rootPath: string; providerId: string; title: string }): Promise<AcpSession> {
@@ -319,6 +330,7 @@ export class AcpSessionManager {
     if (!record.adapter || !record.public.acpSessionId) throw new AcpSessionError(409, "ACP session is not live");
     const result = await record.adapter.setConfigOption(record.public.acpSessionId, configId, value);
     this.applyConfigOptions(record, result.configOptions);
+    this.rememberPreference(record, option, value);
     return record.public.configOptions.map((candidate) => ({ ...candidate, ...(candidate.choices ? { choices: [...candidate.choices] } : {}) }));
   }
 
@@ -425,6 +437,7 @@ export class AcpSessionManager {
     const response = await record.adapter.newSession(record.rootPath);
     record.public.acpSessionId = response.sessionId;
     this.applySessionResponse(record, response);
+    await this.applyProviderPreferences(record);
     record.public.resumability = record.public.capabilities.canLoad || record.public.capabilities.canResume ? "resumable" : "non_resumable";
     record.public.status = "live";
     record.public.error = undefined;
@@ -445,6 +458,37 @@ export class AcpSessionManager {
     record.public.configOptions = normalizeConfigOptions(options);
     record.public.capabilities = { ...record.public.capabilities, canSetConfig: record.public.configOptions.length > 0 };
     this.publish(record, { type: "config", sessionId: record.public.id, options: record.public.configOptions });
+  }
+
+  private async applyProviderPreferences(record: LiveAcpSession): Promise<void> {
+    if (!record.adapter || !record.public.acpSessionId) return;
+    const preferences = this.providerPreferenceValues.get(record.public.providerId);
+    if (!preferences?.size) return;
+    for (const [configId, value] of preferences) {
+      const option = record.public.configOptions.find((candidate) => candidate.id === configId);
+      if (!option || !compatiblePreference(option, value) || option.currentValue === value) continue;
+      try {
+        const result = await record.adapter.setConfigOption(record.public.acpSessionId, configId, value);
+        this.applyConfigOptions(record, result.configOptions);
+      } catch {
+        // Remembered settings are best-effort; provider defaults remain usable.
+      }
+    }
+  }
+
+  private rememberPreference(record: LiveAcpSession, option: AcpConfigOption, requested: AcpProviderPreferenceValue): void {
+    if (sensitivePreferenceOption(option)) return;
+    const updated = record.public.configOptions.find((candidate) => candidate.id === option.id);
+    const canonical = updated?.currentValue;
+    const value = updated && isPreferenceValue(canonical) && compatiblePreference(updated, canonical) ? canonical : requested;
+    let preferences = this.providerPreferenceValues.get(record.public.providerId);
+    if (!preferences) {
+      preferences = new Map();
+      this.providerPreferenceValues.set(record.public.providerId, preferences);
+    }
+    if (preferences.get(option.id) === value) return;
+    preferences.set(option.id, value);
+    if (this.options.onPreferencesChange) void this.options.onPreferencesChange(this.providerPreferences());
   }
 
   private protocolCallbacks(record: LiveAcpSession): AcpProtocolCallbacks {
@@ -665,6 +709,19 @@ function toSdkConfigOption(option: AcpConfigOption): acp.SessionConfigOption {
     currentValue: typeof option.currentValue === "string" ? option.currentValue : option.choices?.[0]?.value ?? "",
     options: (option.choices ?? []).map((choice) => ({ value: choice.value, name: choice.label })),
   };
+}
+
+function compatiblePreference(option: AcpConfigOption, value: AcpProviderPreferenceValue): boolean {
+  if (option.type === "boolean") return typeof value === "boolean";
+  return typeof value === "string" && option.choices?.some((choice) => choice.value === value) === true;
+}
+
+function isPreferenceValue(value: unknown): value is AcpProviderPreferenceValue {
+  return typeof value === "boolean" || (typeof value === "string" && value.length <= 500);
+}
+
+function sensitivePreferenceOption(option: AcpConfigOption): boolean {
+  return /(^|[-_. ])(token|secret|password|api[\s_-]?key|authorization|credential)(?:$|[-_. ])/i.test(`${option.id} ${option.label}`);
 }
 
 function contextBlock(context: NonNullable<AcpPromptRequest["context"]>[number]): acp.ContentBlock {

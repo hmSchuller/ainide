@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AcpServerEvent } from "@ainide/shared";
+import type { AcpProviderPreference, AcpServerEvent } from "@ainide/shared";
 import type { AinideConfig } from "../config.js";
 import { AcpSessionManager, type AcpResourceHandlers } from "./manager.js";
 
@@ -7,6 +7,7 @@ function fakeProviderScript(): string {
   return [
     "const readline = require('node:readline');",
     "const mode = process.env.ACP_TEST_MODE || 'prompt';",
+    "const optionsFor = (configId, value) => mode === 'dynamic-config' ? [{ type: 'select', id: 'model', name: 'Model', currentValue: configId === 'model' ? value : 'default', options: [{ value: 'default', name: 'Default' }, { value: 'fast', name: 'Fast' }] }, { type: 'select', id: 'effort', name: 'Effort', currentValue: configId === 'effort' ? value : 'low', options: configId === 'model' && value === 'fast' ? [{ value: 'low', name: 'Low' }] : [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] }] : [{ type: 'boolean', id: 'thinking', name: 'Thinking', currentValue: configId === 'thinking' ? value : true }];",
     "const rl = readline.createInterface({ input: process.stdin });",
     "let activePromptId;",
     "const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');",
@@ -20,9 +21,9 @@ function fakeProviderScript(): string {
     "  else if (message.method === 'session/new') {",
     "    if (mode === 'stderr') fail(message.id, -32001, 'API_KEY=' + process.env.API_KEY);",
     "    else if (mode === 'auth' && !process.env.ACP_AUTHENTICATED) fail(message.id, -32000, 'Authentication required');",
-    "    else { process.env.ACP_AUTHENTICATED = 'true'; send(message.id, { sessionId: 'provider-session-1', configOptions: [{ type: 'boolean', id: 'thinking', name: 'Thinking', currentValue: true }] }); if (mode === 'exit') setTimeout(() => process.exit(7), 20); }",
-    "  } else if (message.method === 'session/load') send(message.id, { configOptions: [{ type: 'boolean', id: 'thinking', name: 'Thinking', currentValue: true }] });",
-    "  else if (message.method === 'session/set_config_option') send(message.id, { configOptions: [{ type: 'boolean', id: 'thinking', name: 'Thinking', currentValue: message.params.value }] });",
+    "    else { process.env.ACP_AUTHENTICATED = 'true'; send(message.id, { sessionId: 'provider-session-1', configOptions: optionsFor() }); if (mode === 'exit') setTimeout(() => process.exit(7), 20); }",
+    "  } else if (message.method === 'session/load') send(message.id, { configOptions: optionsFor() });",
+    "  else if (message.method === 'session/set_config_option') { if (mode === 'reject-config') fail(message.id, -32001, 'Configuration rejected'); else send(message.id, { configOptions: optionsFor(message.params.configId, message.params.value) }); }",
     "  else if (message.method === 'session/close') send(message.id, {});",
     "  else if (message.method === 'session/cancel') { if (mode !== 'close-pending') send(activePromptId, { stopReason: 'cancelled' }); }",
     "  else if (message.method === 'session/prompt') {",
@@ -38,7 +39,7 @@ function fakeProviderScript(): string {
   ].join("\n");
 }
 
-function manager(mode: string, onEvent: (event: AcpServerEvent) => void, resources?: AcpResourceHandlers): AcpSessionManager {
+function manager(mode: string, onEvent: (event: AcpServerEvent) => void, resources?: AcpResourceHandlers, initialPreferences?: AcpProviderPreference[]): AcpSessionManager {
   const config: AinideConfig = {
     acpAgents: [{
       id: "fake",
@@ -48,11 +49,11 @@ function manager(mode: string, onEvent: (event: AcpServerEvent) => void, resourc
        env: { ACP_TEST_MODE: mode, API_KEY: "redact-me" },
     }],
   };
-  return new AcpSessionManager({ config, onEvent, resources });
+  return new AcpSessionManager({ config, onEvent, resources, initialPreferences });
 }
 
-function managerWithProviders(providers: NonNullable<AinideConfig["acpAgents"]>, onEvent: (event: AcpServerEvent) => void): AcpSessionManager {
-  return new AcpSessionManager({ config: { acpAgents: providers }, onEvent });
+function managerWithProviders(providers: NonNullable<AinideConfig["acpAgents"]>, onEvent: (event: AcpServerEvent) => void, initialPreferences?: AcpProviderPreference[]): AcpSessionManager {
+  return new AcpSessionManager({ config: { acpAgents: providers }, onEvent, initialPreferences });
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -116,6 +117,43 @@ describe("ACP session manager", () => {
     await sessions.close();
   });
 
+  it("remembers successful configuration changes per provider", async () => {
+    const sessions = managerWithProviders([
+      { id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "prompt" } },
+      { id: "other", label: "Other provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "prompt" } },
+    ], () => undefined, [{ providerId: "fake", values: { thinking: false } }]);
+    const fake = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Remembered" });
+    const other = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "other", title: "Default" });
+
+    expect(fake.configOptions[0]?.currentValue).toBe(false);
+    expect(other.configOptions[0]?.currentValue).toBe(true);
+    await sessions.setConfigOption(fake.id, "thinking", true);
+    expect(sessions.providerPreferences()).toEqual([{ providerId: "fake", values: { thinking: true } }]);
+    await sessions.close();
+  });
+
+  it("does not replace a remembered value when the provider rejects it", async () => {
+    const sessions = manager("reject-config", () => undefined, undefined, [{ providerId: "fake", values: { thinking: false } }]);
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Rejected" });
+
+    expect(session.configOptions[0]?.currentValue).toBe(true);
+    await expect(sessions.setConfigOption(session.id, "thinking", false)).rejects.toThrow("Configuration rejected");
+    expect(sessions.providerPreferences()).toEqual([{ providerId: "fake", values: { thinking: false } }]);
+    await sessions.close();
+  });
+
+  it("revalidates preferences after dynamic option updates and skips stale values", async () => {
+    const sessions = manager("dynamic-config", () => undefined, undefined, [{ providerId: "fake", values: { model: "fast", effort: "high", missing: "value" } }]);
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Dynamic config" });
+
+    expect(session.status).toBe("live");
+    expect(session.configOptions).toEqual([
+      expect.objectContaining({ id: "model", currentValue: "fast" }),
+      expect.objectContaining({ id: "effort", currentValue: "low", choices: [{ value: "low", label: "Low" }] }),
+    ]);
+    await sessions.close();
+  });
+
   it("keeps authentication-required sessions addressable until authentication succeeds", async () => {
     const events: AcpServerEvent[] = [];
     const sessions = manager("auth", (event) => events.push(event));
@@ -129,6 +167,16 @@ describe("ACP session manager", () => {
     expect(authenticated.status).toBe("live");
     expect(authenticated.acpSessionId).toBe("provider-session-1");
     expect(events.some((event) => event.type === "session_event" && event.event.type === "status" && event.event.session.status === "live")).toBe(true);
+    await sessions.close();
+  });
+
+  it("applies remembered configuration after authentication creates a session", async () => {
+    const sessions = manager("auth", () => undefined, undefined, [{ providerId: "fake", values: { thinking: false } }]);
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Auth config" });
+
+    expect(session.status).toBe("auth_required");
+    const authenticated = await sessions.authenticate(session.id, "local");
+    expect(authenticated.configOptions[0]?.currentValue).toBe(false);
     await sessions.close();
   });
 
@@ -149,7 +197,7 @@ describe("ACP session manager", () => {
   });
 
   it("restores persisted provider sessions when the provider advertises loading", async () => {
-    const sessions = manager("restore", () => undefined);
+    const sessions = manager("restore", () => undefined, undefined, [{ providerId: "fake", values: { thinking: false } }]);
     const restored = await sessions.restore("project-1", process.cwd(), [{
       id: "local-session-1",
       title: "Restored session",
@@ -160,6 +208,8 @@ describe("ACP session manager", () => {
 
     expect(restored[0]).toMatchObject({ id: "local-session-1", status: "live", resumability: "restored" });
     expect(restored[0]?.configOptions).toEqual([expect.objectContaining({ id: "thinking", currentValue: true })]);
+    const fresh = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Fresh session" });
+    expect(fresh.configOptions[0]?.currentValue).toBe(false);
     await sessions.close();
   });
 

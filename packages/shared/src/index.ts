@@ -61,6 +61,13 @@ export interface AcpSessionDescriptor {
   resumability: "resumable" | "non_resumable";
 }
 
+export type AcpProviderPreferenceValue = string | boolean;
+
+export interface AcpProviderPreference {
+  providerId: string;
+  values: Record<string, AcpProviderPreferenceValue>;
+}
+
 export interface AcpProviderDescriptor {
   id: string;
   label: string;
@@ -262,6 +269,7 @@ export interface SessionSnapshot {
   version: number;
   activeRootPath?: string;
   projects: ProjectSessionSnapshot[];
+  acpProviderPreferences?: AcpProviderPreference[];
 }
 
 export interface SessionBootstrap {
@@ -345,8 +353,37 @@ export function parseAcpSessionDescriptors(value: unknown): AcpSessionDescriptor
   });
 }
 
+export function parseAcpProviderPreferences(value: unknown): AcpProviderPreference[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const providerIds = new Set<string>();
+  const preferences = value.flatMap((item): AcpProviderPreference[] => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const providerId = cleanDescriptorValue(record.providerId);
+    const values = record.values;
+    if (!providerId || providerIds.has(providerId) || !values || typeof values !== "object" || Array.isArray(values)) return [];
+    const entries = Object.entries(values);
+    if (!entries.length || entries.length > 100) return [];
+    const optionIds = new Set<string>();
+    const parsed = entries.flatMap(([key, value]): Array<[string, AcpProviderPreferenceValue]> => {
+      const optionId = cleanDescriptorValue(key);
+      if (!optionId || optionIds.has(optionId) || isSensitivePreferenceKey(optionId) || (typeof value !== "string" && typeof value !== "boolean") || (typeof value === "string" && value.length > 500)) return [];
+      optionIds.add(optionId);
+      return [[optionId, value]];
+    });
+    if (parsed.length !== entries.length) return [];
+    providerIds.add(providerId);
+    return [{ providerId, values: Object.fromEntries(parsed) }];
+  });
+  return preferences.length ? preferences : undefined;
+}
+
 function cleanDescriptorValue(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const clean = value.trim();
   return clean && clean.length <= 200 ? clean : undefined;
+}
+
+function isSensitivePreferenceKey(value: string): boolean {
+  return /(^|[-_.])(token|secret|password|api[-_]?key|authorization|credential)(?:$|[-_.])/i.test(value);
 }

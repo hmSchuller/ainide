@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { parseAcpSessionDescriptors, parseAgentSessionDescriptors, parseAppMode, type ProjectSessionSnapshot, type SessionSnapshot, type TerminalKind } from "@ainide/shared";
+import { parseAcpProviderPreferences, parseAcpSessionDescriptors, parseAgentSessionDescriptors, parseAppMode, type ProjectSessionSnapshot, type SessionSnapshot, type TerminalKind } from "@ainide/shared";
 import { sessionsFilePath } from "./config.js";
 
 const SESSION_VERSION = 1;
@@ -30,17 +30,21 @@ export function parseSessionSnapshot(value: unknown): SessionSnapshot | undefine
     return project ? [project] : [];
   }) : [];
   const activeRootPath = typeof record.activeRootPath === "string" && record.activeRootPath ? record.activeRootPath : undefined;
+  const acpProviderPreferences = parseAcpProviderPreferences(record.acpProviderPreferences);
   return {
     version: typeof record.version === "number" && Number.isFinite(record.version) ? record.version : SESSION_VERSION,
     ...(activeRootPath ? { activeRootPath } : {}),
+    ...(acpProviderPreferences ? { acpProviderPreferences } : {}),
     projects,
   };
 }
 
 export function sanitizeSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
+  const acpProviderPreferences = parseAcpProviderPreferences(snapshot.acpProviderPreferences);
   return {
     version: SESSION_VERSION,
     ...(snapshot.activeRootPath ? { activeRootPath: snapshot.activeRootPath } : {}),
+    ...(acpProviderPreferences ? { acpProviderPreferences } : {}),
     projects: snapshot.projects.map((project) => {
       const agentSessions = parseAgentSessionDescriptors(project.agentSessions);
       const acpSessions = parseAcpSessionDescriptors(project.acpSessions);
@@ -111,6 +115,10 @@ function stripSecrets(value: unknown): unknown {
   if (value && typeof value === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "acpProviderPreferences") {
+        result[key] = nested;
+        continue;
+      }
       if (["token", "tokens", "sessionToken", "content", "ptyId", "ptyID", "processId", "pid", "scrollback", "command", "commands", "referenceKit", "referenceKits"].includes(key)) continue;
       result[key] = stripSecrets(nested);
     }

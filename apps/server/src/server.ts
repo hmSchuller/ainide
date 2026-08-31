@@ -156,13 +156,15 @@ export async function createServer(): Promise<AinideServer> {
   const projects = new ProjectRegistry(sendEvent);
   const terminals = new TerminalManager(() => projects.currentWorkspace?.rootPath, config);
   const review = new ReviewManager(() => projects.currentWorkspace?.rootPath);
+  const stored = await loadSessionSnapshot();
+  if (stored) projects.applyDiskSnapshot(stored);
   let persistTimer: NodeJS.Timeout | undefined;
   const persistNow = async () => {
     if (persistTimer) {
       clearTimeout(persistTimer);
       persistTimer = undefined;
     }
-    await saveSessionSnapshot(projects.toSnapshot());
+    await saveSessionSnapshot({ ...projects.toSnapshot(), acpProviderPreferences: acp.providerPreferences() });
   };
   const persistSoon = () => {
     if (persistTimer) clearTimeout(persistTimer);
@@ -174,7 +176,9 @@ export async function createServer(): Promise<AinideServer> {
   const acpTerminals = new AcpTerminalManager();
   const acp = new AcpSessionManager({
     config,
+    initialPreferences: stored?.acpProviderPreferences,
     onEvent: sendAcpEvent,
+    onPreferencesChange: () => persistSoon(),
     resources: createAcpResourceHandlers(projects, acpTerminals),
     onPersistenceChange: (projectId, descriptors) => {
       if (projects.updateUiSnapshot(projectId, { acpSessions: descriptors })) persistSoon();
@@ -235,8 +239,6 @@ export async function createServer(): Promise<AinideServer> {
     }
   };
 
-  const stored = await loadSessionSnapshot();
-  if (stored) projects.applyDiskSnapshot(stored);
   if (stored?.activeRootPath) {
     try {
       const { workspace } = await projects.open(stored.activeRootPath);

@@ -82,6 +82,22 @@ describe("session snapshots", () => {
     expect(parsed?.acpSessions).toEqual([{ id: "local-1", title: "OpenCode", providerId: "opencode", acpSessionId: "provider-1", resumability: "resumable" }]);
   });
 
+  it("parses provider preferences with strict primitive and provider validation", () => {
+    const parsed = parseSessionSnapshot({ version: 1, projects: [], acpProviderPreferences: [
+      { providerId: "opencode", values: { model: "anthropic/claude-sonnet", thinking: true } },
+      { providerId: "opencode", values: { model: "duplicate" } },
+      { providerId: "invalid-type", values: { model: 42 } },
+      { providerId: "sensitive", values: { api_key: "secret" } },
+      { providerId: "duplicate-option", values: { "model ": "first", model: "second" } },
+      { providerId: "too-long", values: { model: "x".repeat(501) } },
+    ] });
+
+    expect(parsed?.acpProviderPreferences).toEqual([{
+      providerId: "opencode",
+      values: { model: "anthropic/claude-sonnet", thinking: true },
+    }]);
+  });
+
   it("persists only title metadata for agents and excludes forbidden session data", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-agent-sessions-"));
     const filePath = path.join(dir, "sessions.json");
@@ -133,6 +149,26 @@ describe("session snapshots", () => {
       acpSessionId: "provider-session-1",
       resumability: "resumable",
     }]);
+  });
+
+  it("round-trips provider preferences without persisting unrelated runtime data", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-acp-preferences-"));
+    const filePath = path.join(dir, "sessions.json");
+    const snapshot = {
+      version: 1,
+      acpProviderPreferences: [{ providerId: "opencode", values: { model: "anthropic/claude-sonnet", thinking: true, content: "allowed option value", command: "allowed option value" } }],
+      projects: [],
+      token: "secret-token",
+      content: "transcript",
+      env: { API_KEY: "secret" },
+      processId: 123,
+    } as unknown as Parameters<typeof saveSessionSnapshot>[0];
+
+    await saveSessionSnapshot(snapshot, filePath);
+    const raw = await readFile(filePath, "utf8");
+    for (const forbidden of ["secret-token", "transcript", "API_KEY", "processId"]) expect(raw).not.toContain(forbidden);
+    expect(JSON.parse(raw).acpProviderPreferences).toEqual(snapshot.acpProviderPreferences);
+    expect(await loadSessionSnapshot(filePath)).toEqual(sanitizeSnapshot(snapshot));
   });
 
   it("round-trips all primary modes and falls back unknown modes to Edit", () => {
