@@ -2,13 +2,26 @@
 
 ## Project
 
-ainide is a local-first, browser-based developer cockpit. The terminal is the AI interface; Monaco is the human editing surface; Git and Difit provide review.
+ainide is a local-first, browser-based developer cockpit. PTY terminals and ACP-backed conversations are the AI interfaces; Monaco is the human editing surface; Git and Difit provide review. Agents remain local processes owned by the ainide server.
 
 ## Structure
 
-- `apps/server`: Fastify HTTP/WebSocket server, safe filesystem APIs, chokidar events, Git status, PTYs, and review lifecycle.
-- `apps/web`: React/Vite UI with Zustand, Monaco Editor, xterm.js, explorer, terminals, and review mode.
-- `packages/shared`: Shared TypeScript protocol and domain types.
+- `apps/server`: Fastify HTTP/WebSocket server, safe filesystem APIs, chokidar events, Git status, PTY and ACP process/session lifecycle, and review lifecycle.
+- `apps/web`: React/Vite UI with Zustand, Monaco Editor, xterm.js, explorer, terminals, ACP conversations, and review mode.
+- `packages/shared`: Shared TypeScript protocol and domain types, including browser-facing ACP types.
+
+## Agent Transports
+
+- PTY agent sessions are real terminal processes started in the active workspace with the configured `agentCommand` (or `AGENT_COMMAND` override).
+- ACP sessions are structured conversations started from configured `acpAgents`. The server launches each provider directly with its configured command and arguments over stdio; ainide does not install providers or proxy them through a shell.
+- ACP authentication and model/configuration choices remain provider-owned and are exposed only through the negotiated session capabilities. See the [README configuration guide](README.md#configuration) for the local configuration shape and examples.
+
+## ACP Boundaries
+
+- Route ACP filesystem and terminal requests through the safe resolver and the session's selected workspace. Reject path escapes, cross-project requests, and invalid terminal operations without reading, writing, or executing the rejected request.
+- Never auto-approve ACP permission requests. Return only an explicit user-selected outcome, and resolve pending requests as cancelled or rejected when the prompt or session is cancelled.
+- Preserve session-token checks for ACP API and `/acp-events` traffic. Keep live ACP provider processes running when the browser disconnects or the user leaves Agents mode, and clean them up on explicit close, project close, provider exit, or ainide shutdown.
+- Persist only ACP session descriptors needed for local identification, project/workspace association, display state, and provider resumability. Never persist authentication secrets, session tokens, provider environment secrets, or live protocol streams, and never present a non-resumable session as restored.
 
 ## Commands
 
