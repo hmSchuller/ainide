@@ -118,6 +118,7 @@ describe("combined agent state", () => {
         status: "live",
         capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
         configOptions: [],
+        availableCommands: [],
         pendingRequests: [],
         activePrompt: false,
         resumability: "non_resumable",
@@ -137,12 +138,34 @@ describe("combined agent state", () => {
   it("filters ACP bootstrap data to the active project and resets replay state on switch", () => {
     useAppStore.setState({ activeProjectId: "/project-a", acpHistory: { old: [{ type: "turn", status: "completed" }] }, acpSequences: { old: 4 }, acpQueued: {} });
     useAppStore.getState().setAcpSessions([
-      { id: "a", title: "A", projectId: "/project-a", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true }, configOptions: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" },
-      { id: "b", title: "B", projectId: "/project-b", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true }, configOptions: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" },
+       { id: "a", title: "A", projectId: "/project-a", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true }, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" },
+       { id: "b", title: "B", projectId: "/project-b", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true }, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" },
     ]);
     expect(useAppStore.getState().acpSessions.map((session) => session.id)).toEqual(["a"]);
     useAppStore.getState().setProjectSession({ activeProjectId: "/project-b", openProjects: [], knownProjects: [] });
     expect(useAppStore.getState().acpHistory).toEqual({});
     expect(useAppStore.getState().acpSequences).toEqual({});
+  });
+
+  it("does not duplicate or overwrite a session observed before its create response", () => {
+    const commands = [{ name: "review", description: "Review changes" }];
+    const session = {
+      id: "race-session",
+      title: "Race",
+      projectId: "/project-a",
+      providerId: "fake",
+      providerLabel: "Fake",
+      authMethods: [],
+      status: "live" as const,
+      capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
+      configOptions: [],
+      availableCommands: commands,
+      pendingRequests: [],
+      activePrompt: false,
+      resumability: "non_resumable" as const,
+    };
+    useAppStore.setState({ activeProjectId: "/project-a", acpSessions: [session] });
+    useAppStore.getState().addAcpSession({ ...session, availableCommands: [] });
+    expect(useAppStore.getState().acpSessions).toEqual([session]);
   });
 });

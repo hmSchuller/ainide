@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AcpActivity, AcpElicitationValue, AcpPendingRequest, AcpRequestResponse, AcpSession, TerminalSession } from "@ainide/shared";
 import { authenticateAcpSession, cancelAcpSession, closeAcpSession, closeTerminal, promptAcpSession, renameAcpSession, renameTerminal, respondToAcpRequest, setAcpConfigOption } from "../api";
+import { filterAcpCommands, insertAcpCommand, matchAcpCommandToken, moveAcpCommandIndex } from "../acp-command-autocomplete";
 import { agentTerminals } from "../terminal-ownership";
 import { useAppStore } from "../store";
 import { TerminalView } from "./TerminalPanel";
@@ -109,6 +110,36 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
   const updateAcpDraft = useAppStore((state) => state.updateAcpDraft);
   const clearAcpDraft = useAppStore((state) => state.clearAcpDraft);
   const setNotice = useAppStore((state) => state.setNotice);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [caret, setCaret] = useState(draft.text.length);
+  const [activeCommandIndex, setActiveCommandIndex] = useState(0);
+  const [completionDismissed, setCompletionDismissed] = useState(false);
+  const commandMatch = matchAcpCommandToken(draft.text, Math.min(caret, draft.text.length));
+  const commandSuggestions = commandMatch ? filterAcpCommands(session.availableCommands, commandMatch.query) : [];
+  const commandListId = `acp-command-list-${session.id}`;
+  const completionOpen = !completionDismissed && commandSuggestions.length > 0;
+
+  useEffect(() => {
+    setCaret((current) => Math.min(current, draft.text.length));
+  }, [draft.text.length]);
+  useEffect(() => {
+    setActiveCommandIndex(0);
+  }, [commandMatch?.query]);
+  useEffect(() => {
+    setActiveCommandIndex((current) => Math.min(current, Math.max(0, commandSuggestions.length - 1)));
+  }, [commandSuggestions.length]);
+
+  const selectCommand = (commandIndex: number) => {
+    if (!commandMatch || !commandSuggestions[commandIndex]) return;
+    const insertion = insertAcpCommand(draft.text, commandMatch, commandSuggestions[commandIndex]);
+    updateAcpDraft(session.id, { text: insertion.text });
+    setCaret(insertion.caret);
+    setCompletionDismissed(true);
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(insertion.caret, insertion.caret);
+    }, 0);
+  };
   const submit = async () => {
     const text = draft.text.trim() || (draft.references.length ? "Review the selected references." : "");
     if (!text || session.activePrompt || session.status === "auth_required") return;
@@ -127,7 +158,13 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
     <AuthPanel session={session} />
     <div className="acp-history" aria-live="polite">{history.length ? history.map((activity, index) => <ActivityView activity={activity} onOpenReference={onOpenReference} key={`${activity.type}-${"id" in activity ? activity.id : index}-${index}`} />) : <p className="acp-history-empty">Prompt this session to start a provider conversation.</p>}</div>
     {session.pendingRequests.map((request) => <PendingRequest key={request.request.requestId} session={session} request={request} />)}
-    <div className="acp-composer"><textarea value={draft.text} onChange={(event) => updateAcpDraft(session.id, { text: event.target.value })} placeholder="Prompt this ACP session..." onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); } }} /><div className="acp-composer-footer"><span>{draft.references.length ? `${draft.references.length} reference${draft.references.length === 1 ? "" : "s"} attached` : "References can be attached from the dock"}</span><div>{session.activePrompt ? <button onClick={() => void cancel()}>Cancel turn</button> : <button className="primary-button compact" onClick={() => void submit()} disabled={!draft.text.trim() && !draft.references.length}>Send ⌘↵</button>}</div></div></div>
+    <div className="acp-composer"><div className="acp-composer-input"><textarea ref={textareaRef} value={draft.text} onChange={(event) => { updateAcpDraft(session.id, { text: event.target.value }); setCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} onSelect={(event) => { setCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} placeholder="Prompt this ACP session..." role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls={completionOpen ? commandListId : undefined} aria-activedescendant={completionOpen ? `${commandListId}-${activeCommandIndex}` : undefined} aria-expanded={completionOpen} onKeyDown={(event) => {
+      if (completionOpen && event.key === "ArrowDown") { event.preventDefault(); setActiveCommandIndex((current) => moveAcpCommandIndex(current, 1, commandSuggestions.length)); return; }
+      if (completionOpen && event.key === "ArrowUp") { event.preventDefault(); setActiveCommandIndex((current) => moveAcpCommandIndex(current, -1, commandSuggestions.length)); return; }
+      if (completionOpen && (event.key === "Enter" || event.key === "Tab") && !event.metaKey && !event.ctrlKey) { event.preventDefault(); selectCommand(activeCommandIndex); return; }
+      if (completionOpen && event.key === "Escape") { event.preventDefault(); setCompletionDismissed(true); return; }
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); }
+    }} />{completionOpen && <div id={commandListId} className="acp-command-suggestions" role="listbox" aria-label="Provider commands">{commandSuggestions.map((command, index) => <button id={`${commandListId}-${index}`} type="button" role="option" aria-selected={index === activeCommandIndex} className={index === activeCommandIndex ? "active" : ""} key={command.name} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(index)}><span><strong>/{command.name}</strong>{command.description && <small>{command.description}</small>}</span>{command.inputHint && <em>{command.inputHint}</em>}</button>)}</div>}</div><div className="acp-composer-footer"><span>{draft.references.length ? `${draft.references.length} reference${draft.references.length === 1 ? "" : "s"} attached` : "References can be attached from the dock"}</span><div>{session.activePrompt ? <button onClick={() => void cancel()}>Cancel turn</button> : <button className="primary-button compact" onClick={() => void submit()} disabled={!draft.text.trim() && !draft.references.length}>Send ⌘↵</button>}</div></div></div>
   </div>;
 }
 

@@ -399,6 +399,7 @@ export class AcpSessionManager {
       status: "connecting",
       capabilities: { ...DEFAULT_CAPABILITIES },
       configOptions: [],
+      availableCommands: [],
       authMethods: [],
       pendingRequests: [],
       activePrompt: false,
@@ -524,6 +525,10 @@ export class AcpSessionManager {
     const normalized = normalizeSessionUpdate(params.update);
     if (normalized.title) record.public.title = normalized.title;
     if (normalized.configOptions) this.applyConfigOptions(record, normalized.configOptions.map(toSdkConfigOption));
+    if (normalized.availableCommands) {
+      record.public.availableCommands = normalized.availableCommands;
+      this.publishStatus(record);
+    }
     for (const activity of normalized.activities) this.appendActivity(record, activity);
   }
 
@@ -669,6 +674,7 @@ function cloneSession(session: AcpSession): AcpSession {
     capabilities: { ...session.capabilities },
     authMethods: session.authMethods.map((method) => ({ ...method })),
     configOptions: session.configOptions.map((option) => ({ ...option, ...(option.choices ? { choices: option.choices.map((choice) => ({ ...choice })) } : {}) })),
+    availableCommands: session.availableCommands.map((command) => ({ ...command })),
     pendingRequests: session.pendingRequests.map((pending) => pending.type === "permission"
       ? { type: "permission", request: { ...pending.request, options: pending.request.options.map((option) => ({ ...option })) } }
       : { type: "elicitation", request: { ...pending.request, fields: pending.request.fields.map((field) => ({ ...field, ...(field.choices ? { choices: field.choices.map((choice) => ({ ...choice })) } : {}) })) } }),

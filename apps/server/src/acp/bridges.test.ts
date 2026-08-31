@@ -18,6 +18,7 @@ function session(projectId: string): AcpSession {
     status: "live",
     capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
     configOptions: [],
+    availableCommands: [],
     pendingRequests: [],
     activePrompt: false,
     resumability: "non_resumable",

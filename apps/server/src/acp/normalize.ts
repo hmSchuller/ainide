@@ -1,6 +1,7 @@
 import * as acp from "@agentclientprotocol/sdk";
 import type {
   AcpActivity,
+  AcpCommand,
   AcpConfigOption,
   AcpConfigOptionChoice,
   AcpElicitationField,
@@ -12,11 +13,16 @@ import type {
 } from "@ainide/shared";
 
 const MAX_ACTIVITY_TEXT = 1_000_000;
+const MAX_COMMANDS = 100;
+const MAX_COMMAND_NAME = 200;
+const MAX_COMMAND_DESCRIPTION = 4_000;
+const MAX_COMMAND_HINT = 500;
 const SECRET_KEY = /token|secret|password|api[-_]?key|authorization|credential|^env$/i;
 
 export interface NormalizedAcpUpdate {
   activities: AcpActivity[];
   configOptions?: AcpConfigOption[];
+  availableCommands?: AcpCommand[];
   title?: string;
 }
 
@@ -93,14 +99,14 @@ export function normalizeSessionUpdate(update: acp.SessionUpdate): NormalizedAcp
       return { activities: [{ type: "plan", id: update.planId, text: "Plan removed", status: "completed" }] };
     case "config_option_update":
       return { activities: [], configOptions: normalizeConfigOptions(update.configOptions) };
+    case "available_commands_update":
+      return { activities: [], availableCommands: normalizeAvailableCommands(update.availableCommands) };
     case "session_info_update":
       return { activities: [], ...(update.title ? { title: cleanOptionalText(update.title) } : {}) };
     case "usage_update":
       return { activities: [{ type: "usage", totalTokens: update.used }] };
     case "current_mode_update":
       return { activities: [{ type: "unknown", name: "current_mode_update", data: { currentModeId: update.currentModeId } }] };
-    case "available_commands_update":
-      return { activities: [{ type: "unknown", name: "available_commands_update", data: safeJson(update) }] };
     case "compaction_update":
     case "compaction_summary_chunk":
       return { activities: [{ type: "unknown", name: update.sessionUpdate, data: safeJson(update) }] };
@@ -180,6 +186,26 @@ function contentActivity(messageId: string | null | undefined, role: "user" | "a
   const text = contentText(content);
   if (text === undefined) return [{ type: "unknown", name: `content:${content.type}`, data: safeJson(content) }];
   return [{ type: "message", id: messageId ?? `${role}-${Date.now()}`, role, text: boundedText(text), ...(format ? { format } : {}), ...(thought ? { thought: true } : {}) }];
+}
+
+function normalizeAvailableCommands(commands: readonly unknown[] | null | undefined): AcpCommand[] {
+  if (!Array.isArray(commands)) return [];
+  const names = new Set<string>();
+  const normalized: AcpCommand[] = [];
+  for (const item of commands.slice(0, MAX_COMMANDS)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const command = item as Record<string, unknown>;
+    const name = commandName(command.name);
+    const description = commandField(command.description, MAX_COMMAND_DESCRIPTION);
+    if (!name || !description || names.has(name)) continue;
+    names.add(name);
+    const input = command.input;
+    const inputHint = input && typeof input === "object" && !Array.isArray(input)
+      ? commandField((input as Record<string, unknown>).hint, MAX_COMMAND_HINT)
+      : undefined;
+    normalized.push({ name, description, ...(inputHint ? { inputHint } : {}) });
+  }
+  return normalized;
 }
 
 function toolActivities(update: acp.ToolCall): AcpActivity[] {
@@ -272,6 +298,21 @@ function cleanText(value: string | null | undefined, fallback: string): string {
 function cleanOptionalText(value: string | null | undefined): string | undefined {
   const clean = typeof value === "string" ? value.trim() : "";
   return clean || undefined;
+}
+
+function commandField(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = value.trim();
+  if (!clean) return undefined;
+  if (clean.length <= maxLength) return clean;
+  const marker = "\n[truncated]";
+  return `${clean.slice(0, maxLength - marker.length)}${marker}`;
+}
+
+function commandName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = value.trim();
+  return clean && clean.length <= MAX_COMMAND_NAME ? clean : undefined;
 }
 
 function safeString(value: unknown): string {

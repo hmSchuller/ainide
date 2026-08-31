@@ -76,6 +76,7 @@ export default function App() {
   const setGit = useAppStore((state) => state.setGit);
   const setTerminals = useAppStore((state) => state.setTerminals);
   const setAcpSessions = useAppStore((state) => state.setAcpSessions);
+  const addAcpSession = useAppStore((state) => state.addAcpSession);
   const applyAcpEvent = useAppStore((state) => state.applyAcpEvent);
   const addTerminal = useAppStore((state) => state.addTerminal);
   const setNotice = useAppStore((state) => state.setNotice);
@@ -579,7 +580,7 @@ export default function App() {
       const selected = providers.find((provider) => provider.id === selection?.trim());
       if (!selected) return;
       const created = await createAcpSession(selected.id, cleanTitle ?? `Agent ${count + 1}`, token);
-      setAcpSessions([...useAppStore.getState().acpSessions, created]);
+      addAcpSession(created);
       useAppStore.getState().setFocusedSession(created.id);
     }).catch((error) => setNotice(error instanceof Error ? error.message : "ACP agent could not be started", "error"));
   };

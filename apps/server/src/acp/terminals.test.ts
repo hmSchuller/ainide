@@ -27,6 +27,7 @@ function session(id: string, rootPath: string): AcpSession {
       canElicit: true,
     },
     configOptions: [],
+    availableCommands: [],
     pendingRequests: [],
     activePrompt: false,
     resumability: "non_resumable",

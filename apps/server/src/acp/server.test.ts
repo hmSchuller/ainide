@@ -14,17 +14,24 @@ async function project(prefix: string): Promise<string> {
   return root;
 }
 
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(predicate()).toBe(true);
+}
+
 function providerScript(): string {
   return [
     "const readline = require('node:readline');",
     "const rl = readline.createInterface({ input: process.stdin });",
     "const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');",
     "const update = (sessionId) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'server-message', content: { type: 'text', text: 'server response' } } } }) + '\\n');",
+    "const commands = (sessionId) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'review', description: 'Review the current changes', input: { hint: 'scope to review' } }, { name: 'skill', description: 'Run a provider skill' }] } } }) + '\\n');",
     "rl.on('line', (line) => {",
     "  const message = JSON.parse(line);",
      "  if (message.method === 'initialize') send(message.id, { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } }, authMethods: [] });",
-     "  else if (message.method === 'session/new') send(message.id, { sessionId: 'server-provider-session' });",
-     "  else if (message.method === 'session/load') send(message.id, {});",
+     "  else if (message.method === 'session/new') { send(message.id, { sessionId: 'server-provider-session' }); setTimeout(() => commands('server-provider-session'), 0); }",
+     "  else if (message.method === 'session/load') { send(message.id, {}); setTimeout(() => commands('server-provider-session'), 0); }",
     "  else if (message.method === 'session/prompt') { update('server-provider-session'); send(message.id, { stopReason: 'end_turn' }); }",
     "  else if (message.method === 'session/close') send(message.id, {});",
     "});",
@@ -77,6 +84,12 @@ describe("ACP server API", () => {
     const session = created.json();
     expect(session).toMatchObject({ title: "API session", providerId: "fake", status: "live" });
     expect(session).not.toHaveProperty("command");
+    await waitFor(() => server.acp.get(session.id)?.availableCommands.length === 2);
+    expect(server.acp.history(session.id)).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: "available_commands_update" })]));
+    expect((await server.app.inject({ method: "GET", url: `/api/acp/sessions/${session.id}`, headers: headers(server.token, false) })).json().session.availableCommands).toEqual([
+      { name: "review", description: "Review the current changes", inputHint: "scope to review" },
+      { name: "skill", description: "Run a provider skill" },
+    ]);
 
     const prompt = await server.app.inject({ method: "POST", url: `/api/acp/sessions/${session.id}/prompt`, headers: auth, payload: { text: "Hello" } });
     expect(prompt.statusCode).toBe(200);
@@ -87,6 +100,7 @@ describe("ACP server API", () => {
     servers.splice(servers.indexOf(server), 1);
     const saved = JSON.parse(await readFile(sessionsPath, "utf8")) as { projects: Array<{ acpSessions?: unknown[] }> };
     expect(saved.projects[0]?.acpSessions).toEqual([expect.objectContaining({ title: "API session", providerId: "fake", acpSessionId: "server-provider-session" })]);
+    expect(JSON.stringify(saved)).not.toContain("availableCommands");
   });
 
   it("rejects malformed commands and inactive-project session access", async () => {
@@ -124,13 +138,14 @@ describe("ACP server API", () => {
     await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth, payload: { path: root } });
     const created = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", title: "Events" } });
     const session = created.json() as { id: string };
+    await waitFor(() => server.acp.get(session.id)?.availableCommands.length === 2);
     const address = await server.app.listen({ host: "127.0.0.1", port: 0 });
     const socket = new WebSocket(`${address.replace("http", "ws")}/acp-events?token=${server.token}`);
     const message = await new Promise<unknown>((resolve, reject) => {
       socket.once("message", (data) => resolve(JSON.parse(data.toString())));
       socket.once("error", reject);
     });
-    expect(message).toMatchObject({ type: "snapshot", projectId: server.projects.activeId, sessions: [expect.objectContaining({ id: session.id })] });
+    expect(message).toMatchObject({ type: "snapshot", projectId: server.projects.activeId, sessions: [expect.objectContaining({ id: session.id, availableCommands: expect.arrayContaining([expect.objectContaining({ name: "review" }), expect.objectContaining({ name: "skill" })]) })] });
     const event = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("ACP event timed out")), 3_000);
       socket.on("message", (data) => {
@@ -164,7 +179,7 @@ describe("ACP server API", () => {
 
     const second = new WebSocket(`${address.replace("http", "ws")}/acp-events?token=${server.token}`);
     const replay = await new Promise<unknown>((resolve, reject) => { second.once("message", (data) => resolve(JSON.parse(data.toString()))); second.once("error", reject); });
-    expect(replay).toMatchObject({ type: "snapshot", sessions: [expect.objectContaining({ id: session.id })], history: { [session.id]: expect.arrayContaining([expect.objectContaining({ type: "message", text: "server response" })]) } });
+    expect(replay).toMatchObject({ type: "snapshot", sessions: [expect.objectContaining({ id: session.id, availableCommands: expect.arrayContaining([expect.objectContaining({ name: "review" }), expect.objectContaining({ name: "skill" })]) })], history: { [session.id]: expect.arrayContaining([expect.objectContaining({ type: "message", text: "server response" })]) } });
     second.close();
   });
 

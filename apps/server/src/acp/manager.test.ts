@@ -13,6 +13,7 @@ function fakeProviderScript(): string {
     "const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');",
     "const fail = (id, code, message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }) + '\\n');",
     "const update = (sessionId, text) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'message-1', content: { type: 'text', text } } } }) + '\\n');",
+    "const commands = (sessionId, availableCommands) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'available_commands_update', availableCommands } } }) + '\\n');",
     "rl.on('line', (line) => {",
     "  const message = JSON.parse(line);",
     "  if (message.method === 'initialize') {",
@@ -21,7 +22,7 @@ function fakeProviderScript(): string {
     "  else if (message.method === 'session/new') {",
     "    if (mode === 'stderr') fail(message.id, -32001, 'API_KEY=' + process.env.API_KEY);",
     "    else if (mode === 'auth' && !process.env.ACP_AUTHENTICATED) fail(message.id, -32000, 'Authentication required');",
-    "    else { process.env.ACP_AUTHENTICATED = 'true'; send(message.id, { sessionId: 'provider-session-1', configOptions: optionsFor() }); if (mode === 'exit') setTimeout(() => process.exit(7), 20); }",
+    "    else { process.env.ACP_AUTHENTICATED = 'true'; send(message.id, { sessionId: 'provider-session-1', configOptions: optionsFor() }); if (mode === 'commands' || mode === 'commands-dynamic') setTimeout(() => commands('provider-session-1', [{ name: 'plan', description: 'Create a plan', input: { hint: 'what to plan' } }, { name: 'skill', description: 'Run a skill' }]), 0); if (mode === 'commands-dynamic') { setTimeout(() => commands('provider-session-1', [{ name: 'review', description: 'Review changes' }]), 50); setTimeout(() => commands('provider-session-1', []), 100); } if (mode === 'exit') setTimeout(() => process.exit(7), 20); }",
     "  } else if (message.method === 'session/load') send(message.id, { configOptions: optionsFor() });",
     "  else if (message.method === 'session/set_config_option') { if (mode === 'reject-config') fail(message.id, -32001, 'Configuration rejected'); else send(message.id, { configOptions: optionsFor(message.params.configId, message.params.value) }); }",
     "  else if (message.method === 'session/close') send(message.id, {});",
@@ -114,6 +115,34 @@ describe("ACP session manager", () => {
     await expect(sessions.setConfigOption(first.id, "thinking", false)).resolves.toEqual([expect.objectContaining({ id: "thinking", currentValue: false })]);
     expect(sessions.get(first.id)?.configOptions[0]?.currentValue).toBe(false);
     expect(sessions.get(second.id)?.configOptions[0]?.currentValue).toBe(true);
+    await sessions.close();
+  });
+
+  it("stores advertised commands on the session instead of its activity history", async () => {
+    const events: AcpServerEvent[] = [];
+    const sessions = manager("commands", (event) => events.push(event));
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Commands" });
+
+    await waitFor(() => sessions.get(session.id)?.availableCommands.length === 2);
+    expect(sessions.get(session.id)?.availableCommands).toEqual([
+      { name: "plan", description: "Create a plan", inputHint: "what to plan" },
+      { name: "skill", description: "Run a skill" },
+    ]);
+    expect(sessions.history(session.id)).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: "available_commands_update" })]));
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "session_event", event: expect.objectContaining({ type: "status", session: expect.objectContaining({ availableCommands: expect.any(Array) }) }) }),
+    ]));
+    await sessions.close();
+  });
+
+  it("replaces and clears advertised commands when the provider changes them", async () => {
+    const sessions = manager("commands-dynamic", () => undefined);
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Dynamic commands" });
+
+    await waitFor(() => sessions.get(session.id)?.availableCommands.length === 2);
+    await waitFor(() => sessions.get(session.id)?.availableCommands[0]?.name === "review");
+    expect(sessions.get(session.id)?.availableCommands).toEqual([{ name: "review", description: "Review changes" }]);
+    await waitFor(() => sessions.get(session.id)?.availableCommands.length === 0);
     await sessions.close();
   });
 

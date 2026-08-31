@@ -60,6 +60,7 @@ interface AppState {
   setGit: (git?: GitStatus) => void;
   setTerminals: (terminals: TerminalSession[]) => void;
   setAcpSessions: (sessions: AcpSession[]) => void;
+  addAcpSession: (session: AcpSession) => void;
   updateAcpSession: (id: string, update: Partial<AcpSession>) => void;
   applyAcpEvent: (event: AcpServerEvent) => void;
   setAcpDraft: (id: string, draft: AcpPromptDraft) => void;
@@ -213,6 +214,11 @@ export const useAppStore = create<AppState>((set) => ({
       pinnedSessionId: current.pinnedSessionId && agentIds.has(current.pinnedSessionId) ? current.pinnedSessionId : undefined,
       referenceTargetId: current.referenceTargetId && liveAgentIds.has(current.referenceTargetId) ? current.referenceTargetId : undefined,
     };
+  }),
+  addAcpSession: (session) => set((current) => {
+    if (current.activeProjectId && session.projectId !== current.activeProjectId) return current;
+    if (current.acpSessions.some((candidate) => candidate.id === session.id)) return current;
+    return { acpSessions: [...current.acpSessions, session] };
   }),
   updateAcpSession: (id, update) => set((current) => ({ acpSessions: current.acpSessions.map((session) => session.id === id ? { ...session, ...update } : session) })),
   applyAcpEvent: (event) => set((current) => {

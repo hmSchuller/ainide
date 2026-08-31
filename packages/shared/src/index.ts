@@ -117,6 +117,12 @@ export interface AcpConfigOption {
   choices?: AcpConfigOptionChoice[];
 }
 
+export interface AcpCommand {
+  name: string;
+  description: string;
+  inputHint?: string;
+}
+
 export interface AcpPermissionOption {
   id: string;
   label: string;
@@ -160,6 +166,7 @@ export interface AcpSession {
   status: AcpSessionStatus;
   capabilities: AcpSessionCapabilities;
   configOptions: AcpConfigOption[];
+  availableCommands: AcpCommand[];
   pendingRequests: AcpPendingRequest[];
   activePrompt: boolean;
   resumability: "unknown" | "resumable" | "non_resumable" | "restored";

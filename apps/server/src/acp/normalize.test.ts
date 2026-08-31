@@ -36,6 +36,33 @@ describe("ACP normalization", () => {
     expect(result.activities).toEqual([{ type: "unknown", name: "future_update", data: { sessionUpdate: "future_update", reason: "diagnostic" } }]);
   });
 
+  it("normalizes available commands without retaining the provider update as activity", () => {
+    const update = {
+      sessionUpdate: "available_commands_update",
+      availableCommands: [
+        { name: " plan ", description: " Create a plan ", input: { hint: "what to plan" } },
+        { name: "plan", description: "Duplicate" },
+        { name: "invalid", description: "" },
+        { name: "future", description: "Future input", input: { type: "unsupported", hint: 42 } },
+      ],
+    } as unknown as acp.SessionUpdate;
+    const result = normalizeSessionUpdate(update);
+    expect(result.activities).toEqual([]);
+    expect(result.availableCommands).toEqual([
+      { name: "plan", description: "Create a plan", inputHint: "what to plan" },
+      { name: "future", description: "Future input" },
+    ]);
+  });
+
+  it("bounds command metadata and ignores malformed command entries", () => {
+    const update = {
+      sessionUpdate: "available_commands_update",
+      availableCommands: [null, { name: "x".repeat(201), description: "too long name" }, { name: "large", description: "d".repeat(4_001), input: { hint: "h".repeat(501) } }],
+    } as unknown as acp.SessionUpdate;
+    const result = normalizeSessionUpdate(update);
+    expect(result.availableCommands).toEqual([{ name: "large", description: `${"d".repeat(4_000 - "\n[truncated]".length)}\n[truncated]`, inputHint: `${"h".repeat(500 - "\n[truncated]".length)}\n[truncated]` }]);
+  });
+
   it("adds a visible marker when retained activity payloads exceed the bound", () => {
     const result = normalizeSessionUpdate({ sessionUpdate: "agent_message_chunk", messageId: "large", content: { type: "text", text: "x".repeat(1_000_001) } });
     expect(result.activities[0]).toMatchObject({ type: "message", text: expect.stringContaining("[truncated]") });
