@@ -37,6 +37,7 @@ describe("acceptance matrix", () => {
     await withServer(async (server) => {
       const headers = auth(server.token);
       const a = await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: first } });
+      expect(server.terminals.list(a.json().activeProjectId).filter((session) => session.kind === "agent")).toHaveLength(0);
       const agent = await server.app.inject({ method: "POST", url: "/api/terminals", headers, payload: { kind: "agent", cols: 80, rows: 24 } });
       const agentId = agent.json().id as string;
       const agentPid = agent.json().pid as number;

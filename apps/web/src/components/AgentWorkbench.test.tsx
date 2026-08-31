@@ -1,4 +1,5 @@
 import { vi, describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
 
 vi.hoisted(() => {
   if (!globalThis.localStorage) {
@@ -16,7 +17,8 @@ vi.hoisted(() => {
 vi.mock("./TerminalPanel", () => ({ TerminalView: () => null }));
 
 import type { AcpSession, TerminalSession } from "@ainide/shared";
-import { combinedAgentEntries } from "./AgentWorkbench";
+import { useAppStore } from "../store";
+import { AgentWorkbench, combinedAgentEntries } from "./AgentWorkbench";
 
 const capabilities = { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true };
 
@@ -26,6 +28,18 @@ describe("AgentWorkbench", () => {
      const acp: AcpSession = { id: "acp", title: "ACP agent", titleSource: "user", projectId: "/project", providerId: "fake", providerLabel: "Fake provider", authMethods: [], status: "live", capabilities, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" };
     const hidden: AcpSession = { ...acp, id: "hidden", projectId: "/other", title: "Hidden" };
     expect(combinedAgentEntries([pty], [acp, hidden], "/project")).toEqual([{ kind: "pty", session: pty }, { kind: "acp", session: acp }]);
+  });
+
+  it("shows the Agents empty view when the active project has no retained agents", () => {
+    useAppStore.setState({ activeProjectId: "/project", terminals: [], acpSessions: [], focusedSessionId: undefined, pinnedSessionId: undefined });
+    const markup = renderToStaticMarkup(<AgentWorkbench onNewAgent={() => undefined} onOpenReference={() => undefined} />);
+    expect(markup).toContain("NO AGENTS RUNNING");
+    expect(markup).toContain("Start first agent");
+  });
+
+  it("does not show an agent retained by another project", () => {
+    const hidden: TerminalSession = { id: "hidden", title: "Hidden", command: "agent", cwd: "/other", alive: true, kind: "agent", projectId: "/other" };
+    expect(combinedAgentEntries([hidden], [], "/project")).toEqual([]);
   });
 
 });

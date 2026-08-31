@@ -33,3 +33,9 @@
 - [x] 5.1 Update user-facing agent configuration and usage documentation to describe the provider-only picker, immediate launch, provisional titles, and provider/user title precedence, and verify the documented flow matches the UI.
 - [x] 5.2 Run `npm run typecheck` and `npm test` from the repository root, and verify ACP API, server, persistence, picker, race, and workbench tests all pass.
 - [x] 5.3 Run `npm run build` from the repository root and verify the production frontend and server build with no generated artifacts added to the change.
+
+## 6. Project-open Agent Initialization
+
+- [x] 6.1 Exclude agent PTYs from default project-open and project-switch reconciliation while preserving explicit PTY agent creation.
+- [x] 6.2 Verify that opening or switching to a project with no retained PTY or ACP agents leaves the agent list empty and renders the Agents empty view.
+- [x] 6.3 Verify project isolation: retained agents appear when returning to their project, while no placeholder agent is created for projects without one.

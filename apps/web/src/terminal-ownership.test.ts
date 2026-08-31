@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { TerminalSession } from "@ainide/shared";
+import { DEFAULT_TERMINAL_KINDS, missingTerminalKinds, type TerminalSession } from "@ainide/shared";
 import { agentTerminals, lazygitTerminals, selectLazygitSession, shouldStartLazygitSession, utilityTerminals } from "./terminal-ownership";
 
 function session(overrides: Partial<TerminalSession> = {}): TerminalSession {
@@ -42,6 +42,11 @@ describe("terminal ownership", () => {
       session({ id: "lazygit", kind: "lazygit" }),
     ];
     expect(agentTerminals(terminals, "/proj-a").map((item) => item.id)).toEqual(["agent"]);
+  });
+
+  it("does not include agent PTYs in project startup reconciliation", () => {
+    expect(missingTerminalKinds([], DEFAULT_TERMINAL_KINDS)).toEqual(["shell", "lazygit"]);
+    expect(missingTerminalKinds([session({ kind: "agent" })], DEFAULT_TERMINAL_KINDS)).toEqual(["shell", "lazygit"]);
   });
 
   it("reuses an existing Lazygit session instead of starting another", () => {

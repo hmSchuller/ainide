@@ -326,7 +326,7 @@ export interface FileCreateRequest {
   type: FileCreateType;
 }
 
-export const DEFAULT_TERMINAL_KINDS: TerminalKind[] = ["agent", "shell", "lazygit"];
+export const DEFAULT_TERMINAL_KINDS: TerminalKind[] = ["shell", "lazygit"];
 
 export { DEFAULT_BACKEND_PORT, resolveBackendPort } from "./port.js";
 

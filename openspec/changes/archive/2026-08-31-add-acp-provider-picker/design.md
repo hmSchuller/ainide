@@ -10,6 +10,7 @@ ACP `session/new` returns a session ID and optional configuration, not a title. 
 
 - Make configured ACP providers the sole source for the new-agent picker.
 - Launch a selected provider without an intermediate confirmation or title prompt.
+- Avoid creating a default agent PTY during project open or switch; show the empty Agents view until an actual agent is explicitly started.
 - Show a useful title before an asynchronous provider title is available.
 - Preserve provider title updates until the user explicitly renames a session.
 - Make an explicit user rename authoritative across live updates, reconnects, and restarts.
@@ -17,7 +18,7 @@ ACP `session/new` returns a session ID and optional configuration, not a title. 
 
 **Non-Goals:**
 
-- Adding a PTY entry to the ACP provider picker or changing PTY creation elsewhere.
+- Adding a PTY entry to the ACP provider picker or changing explicit PTY creation elsewhere.
 - Asking the provider to generate a title through a synthetic prompt or provider-specific API.
 - Inferring titles from provider IDs, model names, workspace names, or conversation content in ainide.
 - Allowing the browser to see provider commands, arguments, environment values, or other configuration secrets while loading the picker.
@@ -41,7 +42,11 @@ The server owns the fallback rather than the browser so every client sees the sa
 
 Alternative considered: wait for a provider title before completing creation. Rejected because title updates are asynchronous and optional, which would make a provider that never advertises a title impossible to start. Alternative considered: have the browser send the provider label as a hidden title. Rejected because it makes a client detail responsible for server metadata and obscures the distinction between a fallback and a user title.
 
-### 3. Model title authority explicitly
+### 3. Treat project startup as session discovery, not agent creation
+
+Opening or switching a project must not create an agent PTY solely because no agent exists. The workbench derives its entries from actual retained PTY or ACP sessions and shows its existing empty state when none belong to the active project. Explicit PTY agent creation remains unchanged.
+
+### 4. Model title authority explicitly
 
 Each live ACP record and persisted ACP descriptor will carry title provenance with two states: `provider` and `user`. New sessions start as `provider`. A valid non-empty `session_info_update.title` replaces the current title only while provenance is `provider`; the manager then publishes a normal sequenced session status event and persists the updated descriptor. Empty, null, malformed, or invalid title values are ignored, leaving the current usable title intact.
 
@@ -49,7 +54,7 @@ The rename operation sets the title and provenance to `user` in one server-side 
 
 Alternative considered: compare the incoming provider title with the current title to infer whether the user renamed it. Rejected because a provider can legitimately emit the same or a changed title, and the comparison cannot distinguish a provisional label from a historical user title. Alternative considered: keep the override only in browser memory. Rejected because the server owns restoration and may have to enforce the rule after browser reconnects or for another local client.
 
-### 4. Reconcile provider updates and the create response by session ID
+### 5. Reconcile provider updates and the create response by session ID
 
 Provider status events can arrive before or after the HTTP create response. The browser will merge the response into the existing ACP session list by local session ID instead of blindly appending it. If a status event has already delivered a generated title or another newer session field, the create response will not overwrite that state or create a duplicate navigator entry.
 
@@ -57,7 +62,7 @@ The server will publish title changes through the existing project-scoped ACP ev
 
 Alternative considered: add a separate title event. Rejected because title is session state, not conversation activity, and a second event type would duplicate existing snapshot and sequencing behavior. Alternative considered: always replace the browser record with the HTTP response. Rejected because asynchronous provider metadata can already be newer than that response.
 
-### 5. Keep persistence limited to title metadata
+### 6. Keep persistence limited to title metadata
 
 The persisted ACP descriptor will add only the title-provenance value needed to enforce rename precedence. Provider title text remains ordinary display metadata; commands, live protocol data, authentication material, environment values, and transcripts remain outside persistence. Restoration will retain the stored title and authority state, then allow provider-generated updates only for sessions whose stored provenance is `provider`.
 

@@ -6,6 +6,7 @@ Creating an ACP agent currently requires two native prompts: the user must inven
 
 - Replace the title and free-form provider prompts with an in-app picker containing only configured ACP providers and their display labels.
 - Start the selected provider immediately after the user chooses it; do not expose a PTY option or silently fall back to a terminal agent from this flow.
+- Do not auto-create an agent PTY when opening or switching projects. When the active project has no actual PTY or ACP agent session, Agents mode shows its empty state instead of presenting a synthesized terminal agent.
 - Make the user-supplied title optional for new ACP sessions and use a provider label as a provisional display title until the provider sends an ACP-generated title.
 - Apply provider-generated titles from `session_info_update` and make accepted title changes visible to the browser and local session persistence.
 - Track title ownership so an explicit user rename remains authoritative and later provider title updates cannot overwrite it, including after restart restoration.
@@ -28,4 +29,4 @@ None.
 - `apps/server`: Expose the existing configured-provider list for the picker, accept title-less creation with a safe provisional title, publish and persist provider title updates, and preserve user title overrides.
 - `packages/shared`: Extend ACP session and persisted descriptor metadata with title ownership needed for restart-safe rename precedence.
 - ACP API, WebSocket, persistence, and workbench tests: Cover provider-only selection, immediate launch, empty and failed providers, generated titles, rename precedence, restart behavior, and creation races.
-- No new dependency, provider integration, or PTY behavior is introduced; the existing PTY special case is removed from the new-agent flow.
+- No new dependency or provider integration is introduced. Explicit PTY creation remains available elsewhere, while project startup no longer creates an agent PTY solely to populate the workbench.

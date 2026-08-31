@@ -36,12 +36,22 @@ The system SHALL allow the user to create more than one agent session for the ac
 
 ### Requirement: Agent sessions have identifiable status and names
 
-The system SHALL show each agent session with a user-visible title and reliable connection or process status. The user SHALL be able to distinguish at least connecting, live, waiting for user input, disconnected, and exited states when applicable, and SHALL be able to rename a session for its purpose.
+The system SHALL show each agent session with a user-visible title and reliable connection or process status. A title MAY initially be a provisional provider label and MAY later be supplied by the ACP provider. The user SHALL be able to distinguish at least connecting, live, waiting for user input, disconnected, and exited states when applicable, and SHALL be able to rename a session for its purpose. After an explicit user rename, the user-selected title SHALL remain authoritative over later provider-generated title updates, including after session restoration.
 
 #### Scenario: User distinguishes sessions and providers
 
-- **WHEN** two sessions have been named "Implement" and "Review" and use different configured ACP providers
-- **THEN** the Agents navigator displays their titles, provider identity, and individual current status
+- **WHEN** two sessions have titles supplied by the user or their providers and use different configured ACP providers
+- **THEN** the Agents navigator displays each title, provider identity, and individual current status
+
+#### Scenario: Provider title replaces a provisional title
+
+- **WHEN** an ACP session initially displays its provider label and the provider later supplies a valid session title
+- **THEN** the Agents navigator updates that session's visible title without changing its provider identity, status, conversation, or terminal state
+
+#### Scenario: User rename overrides provider title
+
+- **WHEN** the user renames an ACP session and the provider later supplies another title
+- **THEN** the Agents navigator retains the user-selected title
 
 #### Scenario: User distinguishes parallel work
 
@@ -90,6 +100,15 @@ The Agents workbench SHALL display only agent sessions belonging to the active p
 
 - **WHEN** the user returns to a project whose agent sessions continued running while hidden
 - **THEN** the Agents workbench lists those existing agent sessions with their existing identities and output
+
+### Requirement: The agent workbench reflects actual sessions
+
+The system SHALL NOT create an agent PTY solely when opening or switching a project. When the active project has no retained PTY or ACP agent sessions, the Agents mode SHALL display its empty state and leave agent creation to an explicit user action. Explicit PTY and ACP agent creation actions remain available.
+
+#### Scenario: Project opens without agents
+
+- **WHEN** a project is opened or switched to and it has no retained PTY or ACP agent sessions
+- **THEN** the system does not start an agent PTY and the Agents mode displays an empty view with an explicit action to start an agent
 
 ### Requirement: Agent session descriptors support restart recreation or ACP resume
 

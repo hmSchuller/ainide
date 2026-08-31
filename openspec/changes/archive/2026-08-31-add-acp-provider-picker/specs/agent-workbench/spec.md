@@ -33,3 +33,12 @@ The system SHALL show each agent session with a user-visible title and reliable 
 
 - **WHEN** an agent process exits
 - **THEN** its session remains identifiable as exited and its available terminal output remains viewable until the user closes the session
+
+### Requirement: The agent workbench reflects actual sessions
+
+The system SHALL NOT create an agent PTY solely when opening or switching a project. When the active project has no retained PTY or ACP agent sessions, the Agents mode SHALL display its empty state and leave agent creation to an explicit user action. Explicit PTY and ACP agent creation actions remain available.
+
+#### Scenario: Project opens without agents
+
+- **WHEN** a project is opened or switched to and it has no retained PTY or ACP agent sessions
+- **THEN** the system does not start an agent PTY and the Agents mode displays an empty view with an explicit action to start an agent
