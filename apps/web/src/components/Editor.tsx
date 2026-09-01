@@ -4,6 +4,7 @@ import type { EditorTab, EditorPaneId, EditorPaneState } from "../types";
 import { isDirty, useAppStore } from "../store";
 import type { CodeSelection } from "../references";
 import { configureMonacoLanguageSurface } from "../monaco-language-surface";
+import { language } from "../file-language";
 
 interface EditorProps {
   onSave: (tab: EditorTab) => void;
@@ -14,16 +15,6 @@ interface EditorProps {
   onAddSelectionToKit: (tab: EditorTab, selection: CodeSelection) => void;
   onCopyFile: (tab: EditorTab) => void;
   onAddFileToKit: (tab: EditorTab) => void;
-}
-
-const languageByExtension: Record<string, string> = {
-  ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", css: "css", scss: "scss",
-  html: "html", md: "markdown", py: "python", rs: "rust", go: "go", java: "java", sh: "shell", yml: "yaml", yaml: "yaml",
-};
-
-function language(path: string): string {
-  const extension = path.split(".").pop()?.toLowerCase() ?? "";
-  return languageByExtension[extension] ?? "plaintext";
 }
 
 interface DraggedTab {

@@ -13,6 +13,10 @@ export interface ReferenceItem {
   wholeFile: boolean;
   content: string;
   language: string;
+  mention?: string;
+  mentionStart?: number;
+  mentionBefore?: string;
+  mentionAfter?: string;
 }
 
 export interface ClipboardResult {
@@ -70,6 +74,40 @@ export function captureFileReference(input: { path: string; content: string; lan
   };
 }
 
+export function captureMentionedFileReference(input: { path: string; content: string; language: string; mention: string; mentionStart?: number; mentionBefore?: string; mentionAfter?: string }): ReferenceItem {
+  return {
+    ...captureFileReference(input),
+    mention: input.mention,
+    ...(input.mentionStart === undefined ? {} : { mentionStart: input.mentionStart }),
+    ...(input.mentionBefore === undefined ? {} : { mentionBefore: input.mentionBefore }),
+    ...(input.mentionAfter === undefined ? {} : { mentionAfter: input.mentionAfter }),
+  };
+}
+
+export function removeGeneratedReferenceMention(text: string, reference: ReferenceItem): string {
+  if (!reference.mention) return text;
+  const mention = reference.mention;
+  const start = reference.mentionStart;
+  if (start !== undefined && text.slice(start, start + mention.length) === mention) {
+    return `${text.slice(0, start)}${text.slice(start + mention.length)}`;
+  }
+  const before = reference.mentionBefore;
+  const after = reference.mentionAfter;
+  if (before !== undefined || after !== undefined) {
+    let offset = text.indexOf(mention);
+    while (offset >= 0) {
+      if ((before === undefined || text.slice(0, offset).endsWith(before)) && (after === undefined || text.slice(offset + mention.length).startsWith(after))) {
+        return `${text.slice(0, offset)}${text.slice(offset + mention.length)}`;
+      }
+      offset = text.indexOf(mention, offset + 1);
+    }
+    return text;
+  }
+  const first = text.indexOf(mention);
+  if (first < 0 || text.indexOf(mention, first + mention.length) >= 0) return text;
+  return `${text.slice(0, first)}${text.slice(first + mention.length)}`;
+}
+
 export async function captureTextFileReference(input: {
   path: string;
   language: string;
@@ -102,7 +140,10 @@ export function serializeReferenceKit(items: ReferenceItem[]): string {
 }
 
 export function appendReferenceItems(current: ReferenceItem[], additions: ReferenceItem[]): ReferenceItem[] {
-  return [...current, ...additions.filter((item) => !current.some((reference) => reference.id === item.id))];
+  return additions.reduce((next, item) => {
+    const duplicate = next.some((reference) => reference.id === item.id || (reference.wholeFile && item.wholeFile && reference.path === item.path));
+    return duplicate ? next : [...next, item];
+  }, [...current]);
 }
 
 export function promptContextFromReferences(items: ReferenceItem[]): AcpPromptContext[] {

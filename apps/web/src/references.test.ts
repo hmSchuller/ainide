@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendReferenceItems, captureFileReference, captureSelectionReference, captureTextFileReference, copyReferenceKit, promptContextFromReferences, serializeReference, serializeReferenceKit } from "./references";
+import { appendReferenceItems, captureFileReference, captureMentionedFileReference, captureSelectionReference, captureTextFileReference, copyReferenceKit, promptContextFromReferences, removeGeneratedReferenceMention, serializeReference, serializeReferenceKit } from "./references";
 
 describe("references", () => {
   it("normalizes a selection to inclusive complete lines", () => {
@@ -50,5 +50,22 @@ describe("references", () => {
     const current = appendReferenceItems([], [selected]);
     expect(appendReferenceItems(current, [selected])).toHaveLength(1);
     expect(promptContextFromReferences(current)).toEqual([{ path: "src/dirty.ts", content: "two\nthree", language: "typescript", startLine: 2, endLine: 3 }]);
+  });
+
+  it("tracks and removes an identifiable generated ACP mention only", () => {
+    const reference = captureMentionedFileReference({ path: "src/app.ts", language: "typescript", content: "disk", mention: "@src/app.ts ", mentionStart: 7, mentionBefore: "before ", mentionAfter: " after" });
+    expect(reference.mention).toBe("@src/app.ts ");
+    expect(removeGeneratedReferenceMention("before @src/app.ts  after", reference)).toBe("before  after");
+    expect(removeGeneratedReferenceMention("before @src/other.ts after", reference)).toBe("before @src/other.ts after");
+    expect(promptContextFromReferences([reference])).toEqual([{ path: "src/app.ts", content: "disk", language: "typescript" }]);
+    const repeatedText = "@src/app.ts before @src/app.ts ";
+    const repeated = captureMentionedFileReference({ path: "src/app.ts", language: "typescript", content: "disk", mention: "@src/app.ts ", mentionStart: 19, mentionBefore: "@src/app.ts before ", mentionAfter: "" });
+    expect(removeGeneratedReferenceMention(repeatedText, repeated)).toBe("@src/app.ts before ");
+  });
+
+  it("deduplicates repeated whole-file context by workspace path", () => {
+    const first = captureFileReference({ path: "src/app.ts", language: "typescript", content: "disk" });
+    const second = captureFileReference({ path: "src/app.ts", language: "typescript", content: "newer disk" });
+    expect(appendReferenceItems([], [first, second])).toEqual([first]);
   });
 });

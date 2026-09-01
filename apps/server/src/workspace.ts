@@ -9,7 +9,8 @@ const ignoredNames = new Set([".git", "node_modules", "dist", "build", ".next"])
 
 function globToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-  return new RegExp(`^${escaped}$`);
+  const prefix = pattern.includes("/") ? "" : "(?:.*\\/)?";
+  return new RegExp(`^${prefix}${escaped}$`);
 }
 
 function ignoredByGitignore(patterns: RegExp[], relative: string, name: string): boolean {
@@ -78,7 +79,7 @@ export class WorkspaceManager {
         const clean = line.trim();
         if (!clean || clean.startsWith("#") || clean.startsWith("!")) return [];
         const pattern = clean.replace(/^\//, "").replace(/\/$/, "");
-        return [globToRegExp(pattern.includes("/") ? pattern : `(?:.*\\/)?${pattern}`)];
+        return [globToRegExp(pattern)];
       });
     } catch {
       return [];

@@ -96,6 +96,16 @@ describe("ACP composer prompt dispatch", () => {
     request.resolve();
   });
 
+  it("transmits an @ mention as text plus structured context only on submission", () => {
+    const mentioned = { ...reference, wholeFile: true, startLine: undefined, endLine: undefined, mention: "@src/app.ts " };
+    const { input, dispatch, request, clear } = dispatchInput({ draft: { text: "Review @src/app.ts ", references: [mentioned] } });
+
+    expect(dispatchAcpPrompt(input)).toBe(true);
+    expect(clear).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledWith({ text: "Review @src/app.ts", context: [{ path: "src/app.ts", content: reference.content, language: "typescript" }] });
+    request.resolve();
+  });
+
   it("submits multiline drafts without changing their internal newlines", () => {
     const { input, dispatch, request } = dispatchInput({ draft: { text: "first line\nsecond line", references: [] } });
 

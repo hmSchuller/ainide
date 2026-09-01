@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { AcpActivity, AcpElicitationValue, AcpPendingRequest, AcpRequestResponse, AcpSession, TerminalSession } from "@ainide/shared";
-import { authenticateAcpSession, cancelAcpSession, closeAcpSession, closeTerminal, promptAcpSession, renameAcpSession, renameTerminal, respondToAcpRequest, setAcpConfigOption } from "../api";
+import type { AcpActivity, AcpElicitationValue, AcpPendingRequest, AcpRequestResponse, AcpSession, FileEntry, TerminalSession } from "@ainide/shared";
+import { authenticateAcpSession, cancelAcpSession, closeAcpSession, closeTerminal, promptAcpSession, readFile, renameAcpSession, renameTerminal, respondToAcpRequest, searchFiles, setAcpConfigOption } from "../api";
 import { filterAcpCommands, insertAcpCommand, matchAcpCommandToken, moveAcpCommandIndex } from "../acp-command-autocomplete";
+import { filterAcpFiles, insertAcpFile, matchAcpFileToken, moveAcpFileIndex } from "../acp-file-autocomplete";
+import { initialAcpHistoryFollowState, resumedAcpHistoryFollowState, stateAfterAcpHistoryActivity, stateAfterAcpHistoryScroll } from "../acp-history-scroll";
 import { agentTerminals } from "../terminal-ownership";
 import { useAppStore } from "../store";
 import { TerminalView } from "./TerminalPanel";
 import { ACP_SEND_LABEL, acpComposerKeyAction, dispatchAcpPrompt } from "../acp-composer";
 import type { AcpPromptDraft } from "../project-ui";
+import { captureMentionedFileReference, removeGeneratedReferenceMention } from "../references";
+import { language } from "../file-language";
 
 interface AgentWorkbenchProps {
   onNewAgent: () => void;
@@ -22,6 +26,10 @@ const EMPTY_HISTORY: AcpActivity[] = [];
 
 function isLive(entry: AgentEntry): boolean {
   return entry.kind === "pty" ? entry.session.alive : entry.session.status === "live" || entry.session.status === "waiting";
+}
+
+function sameDraft(left: AcpPromptDraft, right: AcpPromptDraft): boolean {
+  return left.text === right.text && JSON.stringify(left.references) === JSON.stringify(right.references);
 }
 
 export function combinedAgentEntries(terminals: TerminalSession[], acpSessions: AcpSession[], projectId?: string): AgentEntry[] {
@@ -106,6 +114,8 @@ function PendingRequest({ session, request }: { session: AcpSession; request: Ac
 
 function AcpConversation({ session, onOpenReference }: { session: AcpSession; onOpenReference: AgentWorkbenchProps["onOpenReference"] }) {
   const token = useAppStore((state) => state.token);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const directories = useAppStore((state) => state.directories);
   const history = useAppStore((state) => state.acpHistory[session.id] ?? EMPTY_HISTORY);
   const draft = useAppStore((state) => state.acpDrafts[session.id] ?? EMPTY_DRAFT);
   const updateAcpDraft = useAppStore((state) => state.updateAcpDraft);
@@ -113,36 +123,168 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
   const setAcpDraft = useAppStore((state) => state.setAcpDraft);
   const setNotice = useAppStore((state) => state.setNotice);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+  const fileSearchGenerationRef = useRef(0);
+  const fileSelectionGenerationRef = useRef(0);
+  const pendingFileReadsRef = useRef(new Set<number>());
+  const caretRef = useRef(draft.text.length);
   const [caret, setCaret] = useState(draft.text.length);
-  const [activeCommandIndex, setActiveCommandIndex] = useState(0);
+  const [activeCompletionIndex, setActiveCompletionIndex] = useState(0);
   const [completionDismissed, setCompletionDismissed] = useState(false);
+  const [fileSuggestions, setFileSuggestions] = useState<FileEntry[]>([]);
+  const [fileReadPending, setFileReadPending] = useState(false);
+  const [historyFollowState, setHistoryFollowState] = useState(initialAcpHistoryFollowState);
+  const loadedWorkspaceFiles = Object.values(directories).flatMap((directory) => directory.entries);
   const commandMatch = matchAcpCommandToken(draft.text, Math.min(caret, draft.text.length));
-  const commandSuggestions = commandMatch ? filterAcpCommands(session.availableCommands, commandMatch.query) : [];
+  const fileMatch = matchAcpFileToken(draft.text, Math.min(caret, draft.text.length));
+  const commandSuggestions = commandMatch && !fileMatch ? filterAcpCommands(session.availableCommands, commandMatch.query) : [];
   const commandListId = `acp-command-list-${session.id}`;
-  const completionOpen = !completionDismissed && commandSuggestions.length > 0;
+  const fileListId = `acp-file-list-${session.id}`;
+  const completionCount = fileMatch ? fileSuggestions.length : commandSuggestions.length;
+  const completionOpen = !completionDismissed && completionCount > 0;
+  const completionListId = fileMatch ? fileListId : commandListId;
+
+  const setCurrentCaret = (value: number) => {
+    caretRef.current = value;
+    setCaret(value);
+  };
 
   useEffect(() => {
-    setCaret((current) => Math.min(current, draft.text.length));
+    setCaret((current) => {
+      const next = Math.min(current, draft.text.length);
+      caretRef.current = next;
+      return next;
+    });
   }, [draft.text.length]);
   useEffect(() => {
-    setActiveCommandIndex(0);
-  }, [commandMatch?.query]);
+    setActiveCompletionIndex(0);
+  }, [commandMatch?.query, fileMatch?.query, fileMatch?.start]);
   useEffect(() => {
-    setActiveCommandIndex((current) => Math.min(current, Math.max(0, commandSuggestions.length - 1)));
-  }, [commandSuggestions.length]);
+    setActiveCompletionIndex((current) => Math.min(current, Math.max(0, completionCount - 1)));
+  }, [completionCount]);
+
+  useEffect(() => {
+    const generation = ++fileSearchGenerationRef.current;
+    let active = true;
+    setFileSuggestions([]);
+    if (!fileMatch || !activeProjectId) return () => { active = false; };
+    const query = fileMatch.query;
+    const start = fileMatch.start;
+    const isCurrent = () => {
+      const current = useAppStore.getState();
+      const currentDraft = current.acpDrafts[session.id] ?? EMPTY_DRAFT;
+      const currentMatch = matchAcpFileToken(currentDraft.text, caretRef.current);
+      return active
+        && fileSearchGenerationRef.current === generation
+        && current.activeProjectId === activeProjectId
+        && current.acpSessions.some((candidate) => candidate.id === session.id && candidate.projectId === activeProjectId)
+        && currentMatch?.query === query
+        && currentMatch.start === start;
+    };
+    if (!query) {
+      setFileSuggestions(filterAcpFiles(loadedWorkspaceFiles, query));
+      return () => { active = false; };
+    }
+    const timer = window.setTimeout(() => {
+      void searchFiles(query, token).then((results) => {
+        if (isCurrent()) setFileSuggestions(filterAcpFiles(results, query));
+      }).catch((error) => {
+        if (isCurrent()) setNotice(error instanceof Error ? error.message : "Workspace file search failed", "error");
+      });
+    }, 180);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [activeProjectId, caret, directories, draft.text, fileMatch?.query, fileMatch?.start, session.id, setNotice, token]);
+
+  useEffect(() => {
+    const element = historyRef.current;
+    if (!element) return;
+    setHistoryFollowState((current) => {
+      const transition = stateAfterAcpHistoryActivity(current);
+      if (transition.shouldScroll) element.scrollTop = element.scrollHeight;
+      return transition.state;
+    });
+  }, [history]);
 
   const selectCommand = (commandIndex: number) => {
     if (!commandMatch || !commandSuggestions[commandIndex]) return;
     const insertion = insertAcpCommand(draft.text, commandMatch, commandSuggestions[commandIndex]);
     updateAcpDraft(session.id, { text: insertion.text });
-    setCaret(insertion.caret);
+    setCurrentCaret(insertion.caret);
     setCompletionDismissed(true);
     window.setTimeout(() => {
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(insertion.caret, insertion.caret);
     }, 0);
   };
+  const selectFile = async (fileIndex: number) => {
+    const selected = fileSuggestions[fileIndex];
+    const match = fileMatch;
+    if (!selected || !match) return;
+    const projectId = useAppStore.getState().activeProjectId;
+    if (!projectId || projectId !== session.projectId) return;
+    const operation = ++fileSelectionGenerationRef.current;
+    pendingFileReadsRef.current.add(operation);
+    setFileReadPending(true);
+    const position = match.end;
+    const before = useAppStore.getState().acpDrafts[session.id] ?? EMPTY_DRAFT;
+    const draftSnapshot: AcpPromptDraft = { text: before.text, references: [...before.references] };
+    const isCurrentSelection = () => {
+      const current = useAppStore.getState();
+      return operation === fileSelectionGenerationRef.current
+        && current.activeProjectId === projectId
+        && current.acpSessions.find((candidate) => candidate.id === session.id)?.projectId === projectId;
+    };
+    try {
+      const result = await readFile(selected.path, token);
+      if (result.binary) throw new Error("Binary files cannot be attached to an ACP draft");
+      const current = useAppStore.getState();
+      const currentDraft = current.acpDrafts[session.id] ?? EMPTY_DRAFT;
+      const currentCaret = textareaRef.current?.selectionStart ?? caretRef.current;
+      const currentMatch = matchAcpFileToken(currentDraft.text, currentCaret);
+      if (!isCurrentSelection() || !sameDraft(currentDraft, draftSnapshot) || currentCaret !== position || !currentMatch || currentMatch.start !== match.start || currentMatch.end !== position) return;
+      const insertion = insertAcpFile(currentDraft.text, match, selected);
+      const reference = captureMentionedFileReference({ path: selected.path, content: result.content, language: language(selected.path), mention: insertion.mention, mentionStart: match.start, mentionBefore: insertion.text.slice(0, match.start), mentionAfter: insertion.text.slice(insertion.caret) });
+      const existing = currentDraft.references.find((candidate) => candidate.wholeFile && candidate.path === selected.path);
+      const references = existing ? currentDraft.references.map((candidate) => candidate.id === existing.id ? { ...reference, id: existing.id } : candidate) : [...currentDraft.references, reference];
+      updateAcpDraft(session.id, { text: insertion.text, references });
+      setCurrentCaret(insertion.caret);
+      setCompletionDismissed(true);
+      setFileSuggestions([]);
+      window.setTimeout(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(insertion.caret, insertion.caret);
+      }, 0);
+    } catch (error) {
+      if (isCurrentSelection()) setNotice(error instanceof Error ? error.message : "File could not be attached", "error");
+    } finally {
+      pendingFileReadsRef.current.delete(operation);
+      if (pendingFileReadsRef.current.size === 0) setFileReadPending(false);
+    }
+  };
+  const removeDraftReference = (referenceId: string) => {
+    const current = useAppStore.getState().acpDrafts[session.id] ?? EMPTY_DRAFT;
+    const reference = current.references.find((candidate) => candidate.id === referenceId);
+    if (!reference) return;
+    const text = removeGeneratedReferenceMention(current.text, reference);
+    updateAcpDraft(session.id, { text, references: current.references.filter((candidate) => candidate.id !== referenceId) });
+    setCurrentCaret(Math.min(caretRef.current, text.length));
+  };
+  const onHistoryScroll = () => {
+    const element = historyRef.current;
+    if (!element) return;
+    setHistoryFollowState((current) => stateAfterAcpHistoryScroll({ scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }, current));
+  };
+  const resumeHistory = () => {
+    const element = historyRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+    setHistoryFollowState(resumedAcpHistoryFollowState());
+  };
   const submit = () => {
+    if (pendingFileReadsRef.current.size > 0) return false;
     const currentState = useAppStore.getState();
     const currentSession = currentState.acpSessions.find((candidate) => candidate.id === session.id) ?? session;
     return dispatchAcpPrompt({
@@ -164,17 +306,17 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
     <header className="acp-conversation-header"><div><span className="eyebrow">{session.providerLabel}</span><strong>{session.title}</strong></div><SessionStatus entry={{ kind: "acp", session }} /></header>
     <ConfigControls session={session} />
     <AuthPanel session={session} />
-    <div className="acp-history" aria-live="polite">{history.length ? history.map((activity, index) => <ActivityView activity={activity} onOpenReference={onOpenReference} key={`${activity.type}-${"id" in activity ? activity.id : index}-${index}`} />) : <p className="acp-history-empty">Prompt this session to start a provider conversation.</p>}</div>
+    <div className="acp-history-wrap" aria-busy={fileReadPending}><div ref={historyRef} className="acp-history" onScroll={onHistoryScroll} aria-live="polite">{history.length ? history.map((activity, index) => <ActivityView activity={activity} onOpenReference={onOpenReference} key={`${activity.type}-${"id" in activity ? activity.id : index}-${index}`} />) : <p className="acp-history-empty">Prompt this session to start a provider conversation.</p>}</div>{historyFollowState.hasNewActivity && <button type="button" className="acp-new-activity" onClick={resumeHistory}>New activity</button>}</div>
     {session.pendingRequests.map((request) => <PendingRequest key={request.request.requestId} session={session} request={request} />)}
-     <div className="acp-composer"><div className="acp-composer-input"><textarea ref={textareaRef} value={draft.text} onChange={(event) => { updateAcpDraft(session.id, { text: event.target.value }); setCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} onSelect={(event) => { setCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} placeholder="Prompt this ACP session..." role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls={completionOpen ? commandListId : undefined} aria-activedescendant={completionOpen ? `${commandListId}-${activeCommandIndex}` : undefined} aria-expanded={completionOpen} onKeyDown={(event) => {
-       const action = acpComposerKeyAction({ key: event.key, completionOpen, isComposing: event.nativeEvent.isComposing, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey });
-       if (action === "move-down") { event.preventDefault(); setActiveCommandIndex((current) => moveAcpCommandIndex(current, 1, commandSuggestions.length)); return; }
-       if (action === "move-up") { event.preventDefault(); setActiveCommandIndex((current) => moveAcpCommandIndex(current, -1, commandSuggestions.length)); return; }
-       if (action === "select-command") { event.preventDefault(); selectCommand(activeCommandIndex); return; }
-       if (action === "dismiss-completion") { event.preventDefault(); setCompletionDismissed(true); return; }
-       if (action === "submit" && submit()) event.preventDefault();
-     }} />{completionOpen && <div id={commandListId} className="acp-command-suggestions" role="listbox" aria-label="Provider commands">{commandSuggestions.map((command, index) => <button id={`${commandListId}-${index}`} type="button" role="option" aria-selected={index === activeCommandIndex} className={index === activeCommandIndex ? "active" : ""} key={command.name} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(index)}><span><strong>/{command.name}</strong>{command.description && <small>{command.description}</small>}</span>{command.inputHint && <em>{command.inputHint}</em>}</button>)}</div>}</div><div className="acp-composer-footer"><span>{draft.references.length ? `${draft.references.length} reference${draft.references.length === 1 ? "" : "s"} attached` : "References can be attached from the dock"}</span><div>{session.activePrompt ? <button onClick={() => void cancel()}>Cancel turn</button> : <button className="primary-button compact" onClick={() => void submit()} disabled={!draft.text.trim() && !draft.references.length}>{ACP_SEND_LABEL}</button>}</div></div></div>
-  </div>;
+     <div className="acp-composer"><div className="acp-composer-input"><textarea ref={textareaRef} value={draft.text} onChange={(event) => { updateAcpDraft(session.id, { text: event.target.value }); setCurrentCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} onSelect={(event) => { setCurrentCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} placeholder="Prompt this ACP session..." role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls={completionOpen ? completionListId : undefined} aria-activedescendant={completionOpen ? `${completionListId}-${activeCompletionIndex}` : undefined} aria-expanded={completionOpen} onKeyDown={(event) => {
+        const action = acpComposerKeyAction({ key: event.key, completionOpen, isComposing: event.nativeEvent.isComposing, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey });
+        if (action === "move-down") { event.preventDefault(); setActiveCompletionIndex((current) => fileMatch ? moveAcpFileIndex(current, 1, fileSuggestions.length) : moveAcpCommandIndex(current, 1, commandSuggestions.length)); return; }
+        if (action === "move-up") { event.preventDefault(); setActiveCompletionIndex((current) => fileMatch ? moveAcpFileIndex(current, -1, fileSuggestions.length) : moveAcpCommandIndex(current, -1, commandSuggestions.length)); return; }
+        if (action === "select-command") { event.preventDefault(); if (fileMatch) void selectFile(activeCompletionIndex); else selectCommand(activeCompletionIndex); return; }
+        if (action === "dismiss-completion") { event.preventDefault(); fileSelectionGenerationRef.current += 1; setCompletionDismissed(true); return; }
+        if (action === "submit") { if (pendingFileReadsRef.current.size > 0) event.preventDefault(); else if (submit()) event.preventDefault(); }
+      }} />{completionOpen && fileMatch ? <div id={fileListId} className="acp-command-suggestions acp-file-suggestions" role="listbox" aria-label="Workspace files">{fileSuggestions.map((file, index) => <button id={`${fileListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={index === activeCompletionIndex ? "active" : ""} key={file.path} onMouseDown={(event) => event.preventDefault()} onClick={() => void selectFile(index)}><span><strong>@{file.path}</strong><small>Disk file</small></span></button>)}</div> : completionOpen ? <div id={commandListId} className="acp-command-suggestions" role="listbox" aria-label="Provider commands">{commandSuggestions.map((command, index) => <button id={`${commandListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={index === activeCompletionIndex ? "active" : ""} key={command.name} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(index)}><span><strong>/{command.name}</strong>{command.description && <small>{command.description}</small>}</span>{command.inputHint && <em>{command.inputHint}</em>}</button>)}</div> : null}</div>{draft.references.length > 0 && <div className="acp-draft-attachments" aria-label="ACP draft attachments">{draft.references.map((reference) => <div className="acp-draft-attachment" key={reference.id}><span><strong>{reference.path}</strong><small>{reference.wholeFile ? "whole file" : `lines ${reference.startLine}-${reference.endLine}`} · {reference.content.length.toLocaleString()} chars{reference.mention ? " · disk snapshot" : ""}</small></span><button type="button" onClick={() => removeDraftReference(reference.id)} aria-label={`Remove ${reference.path} from draft`}>×</button></div>)}</div>}<div className="acp-composer-footer"><span>{draft.references.length ? `${draft.references.length} reference${draft.references.length === 1 ? "" : "s"} attached` : "References can be attached from the dock"}</span><div>{session.activePrompt ? <button onClick={() => void cancel()}>Cancel turn</button> : <button className="primary-button compact" onClick={() => void submit()} disabled={!draft.text.trim() && !draft.references.length}>{ACP_SEND_LABEL}</button>}</div></div></div>
+   </div>;
 }
 
 export function AgentWorkbench({ onNewAgent, onOpenReference }: AgentWorkbenchProps) {

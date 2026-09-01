@@ -79,6 +79,25 @@ describe("WorkspaceManager file mutations", () => {
     ]));
   });
 
+  it("filters bare and glob gitignore patterns from listings and recursive search", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ainide-workspace-ignore-patterns-"));
+    await writeFile(path.join(root, ".gitignore"), ".build\nDerivedData/\n*.generated\n");
+    await writeFile(path.join(root, "visible.txt"), "visible");
+    await writeFile(path.join(root, "ignored.generated"), "ignored");
+    await mkdir(path.join(root, ".build"), { recursive: true });
+    await writeFile(path.join(root, ".build", "artifact.txt"), "ignored");
+    await mkdir(path.join(root, "DerivedData"), { recursive: true });
+    await writeFile(path.join(root, "DerivedData", "artifact.txt"), "ignored");
+    const manager = new WorkspaceManager();
+    managers.push(manager);
+    await manager.open(root);
+
+    const listed = await manager.list("");
+    expect(listed.map((entry) => entry.path)).toEqual([".gitignore", "visible.txt"]);
+    expect((await manager.search("artifact")).map((entry) => entry.path)).toEqual([]);
+    expect((await manager.search("generated")).map((entry) => entry.path)).toEqual([]);
+  });
+
   it("opens a large workspace without enumerating its descendants", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ainide-workspace-large-"));
     await Promise.all(Array.from({ length: 2_048 }, (_, index) => mkdir(path.join(root, `directory-${index}`))));
