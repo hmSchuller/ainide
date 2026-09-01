@@ -71,7 +71,7 @@ The configured PTY agent is not supplied by ainide. Any locally installed comman
 
 ### Choose and switch projects
 
-Start by entering an absolute workspace path. Use the project switcher in the top bar to open another project, switch between open projects, or close a project. Only one project is visible at a time, but PTYs for other open projects continue running until the project is closed or the ainide process exits.
+Start by entering an absolute workspace path. ainide remembers successfully opened projects in browser-profile-local storage and shows them in the workspace picker; manual absolute-path entry remains available. Use the project switcher in the top bar to open another project, switch between open projects, or close a project. Only one project is visible at a time, but PTYs for other open projects continue running until the project is closed or the ainide process exits.
 
 ### Primary modes
 
@@ -145,6 +145,7 @@ Keep `HOST` set to `127.0.0.1` unless you deliberately want to expose ainide bey
 - Filesystem APIs accept workspace-relative paths only and reject path traversal and symlink escapes.
 - Terminal and agent commands run locally with the permissions and environment of the user running the server.
 - No cloud services, accounts, telemetry, or provider-specific AI APIs are required or included.
+- Recent projects are isolated by browser profile and origin. If profiles share one ainide server, the active project, open-project registry, PTY ownership, and server session snapshots remain global to that server; browser profiles do not provide independent sessions.
 - The local session snapshot stores project paths, open file paths, layout, mode, and terminal descriptions. It does not store file contents, unsaved buffers, terminal scrollback, process IDs, commands, reference kits, or session tokens.
 - Unsaved buffers survive switching projects in the same browser page, but are not restored after a browser reload.
 - PTYs survive browser disconnects and project switches while the server remains running. They are terminated when ainide exits; ainide does not use tmux or another external process holder.

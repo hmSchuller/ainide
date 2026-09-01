@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AcpSession, FileEntry, GitStatus, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
+import type { AcpSession, FileEntry, GitStatus, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
 import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getAcpProviders, getGitStatus, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
 import { EditorSurface, language } from "./components/Editor";
@@ -12,7 +12,7 @@ import { AcpProviderPicker } from "./components/AcpProviderPicker";
 import { LazyGitSurface } from "./components/LazyGitSurface";
 import { ReferenceDock } from "./components/ReferenceDock";
 import { WorkspacePicker } from "./components/WorkspacePicker";
-import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, knownProjectSeed, snapshotFromBag } from "./project-ui";
+import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, recentProjectSeed, snapshotFromBag } from "./project-ui";
 import { createAutoSaver } from "./auto-save";
 import { createGitPollingScheduler } from "./git-polling";
 import { createGitRequestCoordinator } from "./git-request";
@@ -25,6 +25,7 @@ import { basenameFromPath, joinWorkspacePath, renameEntryPath } from "./explorer
 import { shouldShowReferenceDock, terminalPanelVisible } from "./layout-prefs";
 import { PRIMARY_MODE_LABELS, PRIMARY_MODES } from "./navigation";
 import { lazygitTerminals, shouldStartLazygitSession } from "./terminal-ownership";
+import { projectRefFromMutation, readLastWorkspace, readRecentProjects, rememberRecentProject, writeLastWorkspace, writeRecentProjects } from "./recent-projects";
 
 type PaletteAction = { label: string; shortcut?: string; run: () => void };
 
@@ -55,7 +56,6 @@ export default function App() {
   const workspace = useAppStore((state) => state.workspace);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const openProjects = useAppStore((state) => state.openProjects);
-  const knownProjects = useAppStore((state) => state.knownProjects);
   const mode = useAppStore((state) => state.mode);
   const git = useAppStore((state) => state.git);
   const reviewScope = useAppStore((state) => state.review.scope);
@@ -91,6 +91,7 @@ export default function App() {
   const setTerminalCollapsed = useAppStore((state) => state.setTerminalCollapsed);
   const setTerminalMaximized = useAppStore((state) => state.setTerminalMaximized);
   const [starting, setStarting] = useState(true);
+  const [recentProjects, setRecentProjects] = useState<ProjectRef[]>(() => readRecentProjects());
   const [pickerBusy, setPickerBusy] = useState(false);
   const [pickerError, setPickerError] = useState<string>();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -105,6 +106,7 @@ export default function App() {
   const [providerPickerProviders, setProviderPickerProviders] = useState<Awaited<ReturnType<typeof getAcpProviders>>>([]);
   const [startingProviderId, setStartingProviderId] = useState<string>();
   const startingProviderRef = useRef<string>();
+  const recentProjectsRef = useRef(recentProjects);
   const gitRequestRef = useRef(createGitRequestCoordinator());
 
   const applyLists = (result: Pick<ProjectMutationResponse, "activeProjectId" | "openProjects" | "knownProjects"> & { acpSessions?: AcpSession[] }, restoreError?: string) => {
@@ -115,6 +117,15 @@ export default function App() {
       restoreError,
     });
     setAcpSessions(result.acpSessions ?? []);
+  };
+
+  const rememberProject = (result: ProjectMutationResponse) => {
+    const project = projectRefFromMutation(result.workspace, result.activeProjectId);
+    if (!project) return;
+    const next = rememberRecentProject(recentProjectsRef.current, project);
+    recentProjectsRef.current = next;
+    setRecentProjects(next);
+    writeRecentProjects(next);
   };
 
   const isCurrentProject = (projectId: string, nextToken: string): boolean => {
@@ -325,11 +336,11 @@ export default function App() {
     useAppStore.getState().applyDiskTabs(applyDiskToTabs(currentTabs, disk));
   };
 
-  const showProject = async (nextWorkspace: Workspace, projectId: string, nextToken: string, snapshot?: ProjectSessionSnapshot, reuseBag = false) => {
+  const showProject = async (nextWorkspace: Workspace, projectId: string, nextToken: string, snapshot?: ProjectSessionSnapshot, reuseBag = false, persistWorkspaceHint = true) => {
     const store = useAppStore.getState();
     const hasBag = reuseBag && Boolean(store.projectBags[projectId]);
     store.restoreProjectBag(projectId, nextWorkspace, hasBag ? undefined : emptyProjectBag());
-    localStorage.setItem("ainide:last-workspace", nextWorkspace.rootPath);
+    if (persistWorkspaceHint) writeLastWorkspace(nextWorkspace.rootPath);
     await loadExplorerAndGit(nextToken);
     if (hasBag) await reloadTabsFromDisk(nextToken);
     else await reopenFromSnapshot(snapshot, nextToken);
@@ -350,6 +361,7 @@ export default function App() {
     useAppStore.getState().stashActiveBag();
     const result = await openProject(path, nextToken, leavingSnapshot());
     await acceptMutation(result, nextToken, true);
+    rememberProject(result);
   };
 
   const switchToOpenProject = async (projectId: string) => {
@@ -357,6 +369,7 @@ export default function App() {
     useAppStore.getState().stashActiveBag();
     const result = await switchProject(projectId, token, leavingSnapshot());
     await acceptMutation(result, token, true);
+    rememberProject(result);
   };
 
   const closeActiveProject = async () => {
@@ -377,7 +390,7 @@ export default function App() {
         applyLists(session, session.restoreError);
         if (session.restoreError) setPickerError(session.restoreError);
         if (session.workspace && session.activeProjectId) {
-          await showProject(session.workspace, session.activeProjectId, nextToken, session.snapshot, false);
+          await showProject(session.workspace, session.activeProjectId, nextToken, session.snapshot, false, false);
           setAcpSessions(session.acpSessions ?? []);
         }
       } catch (error) {
@@ -793,11 +806,10 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [quickOpen, query, token]);
 
-  const pickerKnown = knownProjects;
-  const pickerInitial = knownProjectSeed(knownProjects, localStorage.getItem("ainide:last-workspace"));
+  const pickerInitial = recentProjectSeed(recentProjects, readLastWorkspace());
 
   if (starting) return <main className="boot-screen"><div className="brand-mark">ai<span>ni</span>de</div><span className="loading-line">Connecting to local runtime...</span></main>;
-  if (!workspace) return <WorkspacePicker initialPath={pickerInitial} knownProjects={pickerKnown} busy={pickerBusy} error={pickerError} onOpen={(path) => {
+  if (!workspace) return <WorkspacePicker initialPath={pickerInitial} recentProjects={recentProjects} busy={pickerBusy} error={pickerError} onOpen={(path) => {
     setPickerBusy(true); setPickerError(undefined);
     void openFromPath(path, token).catch((error) => setPickerError(error instanceof Error ? error.message : "Could not open workspace")).finally(() => setPickerBusy(false));
   }} />;
@@ -867,7 +879,7 @@ export default function App() {
     <div className="notices">{notices.map((notice) => <button className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)}>{notice.text}<span>×</span></button>)}</div>
     {terminalError && mode !== "lazygit" && <div className="terminal-error-toast"><b>Terminal note</b> {terminalError}</div>}
      {addingProject && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddingProject(false); }}>
-      <WorkspacePicker initialPath="" knownProjects={knownProjects.filter((project) => project.projectId !== activeProjectId)} busy={pickerBusy} error={pickerError} onOpen={(path) => {
+      <WorkspacePicker initialPath="" recentProjects={recentProjects.filter((project) => project.projectId !== activeProjectId)} busy={pickerBusy} error={pickerError} onOpen={(path) => {
         setPickerBusy(true); setPickerError(undefined);
         void openFromPath(path, token).then(() => setAddingProject(false)).catch((error) => setPickerError(error instanceof Error ? error.message : "Could not open workspace")).finally(() => setPickerBusy(false));
       }} />

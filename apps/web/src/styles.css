@@ -65,10 +65,10 @@ kbd { color: #929dad; border: 1px solid #343c48; border-radius: 4px; padding: 1p
 .project-menu button { width: 100%; display: block; text-align: left; color: #c7d0da; background: transparent; border-radius: 4px; padding: 8px 10px; font-size: 12px; }
 .project-menu button small { display: block; overflow: hidden; color: #6e7c8c; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .project-menu button:hover, .project-menu button.active { background: #27322f; color: #fff; }
-.known-projects { display: flex; flex-direction: column; gap: 4px; margin: 0 0 18px; }
-.known-project { width: 100%; text-align: left; color: #d5dde6; background: #12171d; border: 1px solid #2c3642; border-radius: 5px; padding: 8px 10px; font-size: 12px; }
-.known-project small { display: block; overflow: hidden; color: #6e7c8c; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; margin-top: 2px; }
-.known-project:hover { border-color: var(--mint); }
+.recent-projects { display: flex; flex-direction: column; gap: 4px; margin: 0 0 18px; }
+.recent-project { width: 100%; text-align: left; color: #d5dde6; background: #12171d; border: 1px solid #2c3642; border-radius: 5px; padding: 8px 10px; font-size: 12px; }
+.recent-project small { display: block; overflow: hidden; color: #6e7c8c; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; margin-top: 2px; }
+.recent-project:hover { border-color: var(--mint); }
 .mode-switch { height: 100%; display: flex; align-items: center; gap: 2px; overflow-x: auto; max-width: min(100%, 420px); scrollbar-width: none; }
 .mode-switch::-webkit-scrollbar { display: none; }
 .mode-switch button { height: 100%; flex: 0 0 auto; padding: 0 9px; color: #788493; background: transparent; border-bottom: 2px solid transparent; font-size: 12px; white-space: nowrap; }

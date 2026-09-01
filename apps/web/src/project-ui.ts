@@ -175,7 +175,7 @@ export function snapshotFromBag(workspace: Workspace, bag: ProjectUiBag): Projec
   };
 }
 
-export function knownProjectSeed(knownProjects: ProjectRef[], lastWorkspace: string | null): string {
-  if (knownProjects.length > 0) return knownProjects[0]?.rootPath ?? "";
+export function recentProjectSeed(recentProjects: ProjectRef[], lastWorkspace: string | null): string {
+  if (recentProjects.length > 0) return recentProjects[0]?.rootPath ?? "";
   return lastWorkspace ?? "";
 }

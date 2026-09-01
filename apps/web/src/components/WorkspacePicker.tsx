@@ -3,13 +3,13 @@ import type { ProjectRef } from "@ainide/shared";
 
 interface WorkspacePickerProps {
   initialPath?: string;
-  knownProjects?: ProjectRef[];
+  recentProjects?: ProjectRef[];
   busy: boolean;
   error?: string;
   onOpen: (path: string) => void;
 }
 
-export function WorkspacePicker({ initialPath = "", knownProjects = [], busy, error, onOpen }: WorkspacePickerProps) {
+export function WorkspacePicker({ initialPath = "", recentProjects = [], busy, error, onOpen }: WorkspacePickerProps) {
   const [path, setPath] = useState(initialPath);
   const [validationError, setValidationError] = useState<string>();
 
@@ -28,11 +28,11 @@ export function WorkspacePicker({ initialPath = "", knownProjects = [], busy, er
         <p className="eyebrow">LOCAL DEVELOPER COCKPIT</p>
         <h1>Choose a workspace</h1>
         <p className="muted picker-copy">Open a local project to edit, inspect Git, and run its tools. Nothing leaves this machine.</p>
-        {knownProjects.length > 0 && (
-          <div className="known-projects">
-            <span className="field-label">Known projects</span>
-            {knownProjects.map((project) => (
-              <button key={project.projectId} className="known-project" type="button" onClick={() => submit(project.rootPath)} disabled={busy}>
+        {recentProjects.length > 0 && (
+          <div className="recent-projects">
+            <span className="field-label">Recent projects</span>
+            {recentProjects.map((project) => (
+              <button key={project.projectId} className="recent-project" type="button" onClick={() => submit(project.rootPath)} disabled={busy}>
                 {project.name}
                 <small>{project.rootPath}</small>
               </button>
@@ -53,7 +53,7 @@ export function WorkspacePicker({ initialPath = "", knownProjects = [], busy, er
             spellCheck={false}
           />
           <datalist id="recent-workspaces">
-            {knownProjects.map((project) => <option key={project.projectId} value={project.rootPath} />)}
+            {recentProjects.map((project) => <option key={project.projectId} value={project.rootPath} />)}
             {initialPath && <option value={initialPath} />}
           </datalist>
         </div>
