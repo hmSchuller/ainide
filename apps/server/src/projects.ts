@@ -51,6 +51,10 @@ export class ProjectRegistry {
     return this.live.get(projectId)?.manager;
   }
 
+  isKnownOrOpen(rootPath: string): boolean {
+    return this.known.has(rootPath) || this.live.has(rootPath);
+  }
+
   openProjects(): ProjectRef[] {
     return [...this.live.values()].flatMap((project) => {
       const workspace = project.manager.current;

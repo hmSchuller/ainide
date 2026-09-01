@@ -10,11 +10,16 @@ export interface AcpAgentConfig {
   env?: Record<string, string>;
 }
 
+export interface ProjectAgentConfig {
+  disabledAgents: string[];
+}
+
 export interface AinideConfig {
   agentCommand?: string;
   defaultShell?: string;
   reviewTool?: "difit";
   acpAgents?: AcpAgentConfig[];
+  projects?: Map<string, ProjectAgentConfig>;
 }
 
 export function configFilePath(): string {
@@ -40,12 +45,48 @@ export async function loadConfig(): Promise<AinideConfig> {
     ...(typeof fileConfig.defaultShell === "string" ? { defaultShell: fileConfig.defaultShell } : {}),
     ...(fileConfig.reviewTool === "difit" ? { reviewTool: fileConfig.reviewTool } : {}),
     ...(parseAcpAgents(fileConfig.acpAgents) ? { acpAgents: parseAcpAgents(fileConfig.acpAgents) } : {}),
+    ...(parseProjects(fileConfig.projects) ? { projects: parseProjects(fileConfig.projects) } : {}),
   };
   return {
     ...config,
     ...(process.env.AGENT_COMMAND ? { agentCommand: process.env.AGENT_COMMAND } : {}),
     ...(process.env.DEFAULT_SHELL ? { defaultShell: process.env.DEFAULT_SHELL } : {}),
   };
+}
+
+/**
+ * Persists the in-memory configuration atomically: the serialized config is
+ * written to a temp file in the same directory, then renamed over the config
+ * file, so a crash never leaves a truncated config behind.
+ */
+export async function saveConfig(config: AinideConfig): Promise<void> {
+  const configPath = configFilePath();
+  const directory = path.dirname(configPath);
+  const tempPath = path.join(directory, `${path.basename(configPath)}.${process.pid}.${Date.now()}.tmp`);
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(tempPath, `${JSON.stringify(serializeConfig(config), null, 2)}\n`, "utf8");
+  try {
+    await fs.rename(tempPath, configPath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function serializeConfig(config: AinideConfig): Record<string, unknown> {
+  const serialized: Record<string, unknown> = {};
+  if (config.agentCommand !== undefined) serialized.agentCommand = config.agentCommand;
+  if (config.defaultShell !== undefined) serialized.defaultShell = config.defaultShell;
+  if (config.reviewTool !== undefined) serialized.reviewTool = config.reviewTool;
+  if (config.acpAgents) serialized.acpAgents = config.acpAgents;
+  if (config.projects && config.projects.size) {
+    // Object.fromEntries uses define-property semantics, so reserved keys such
+    // as "__proto__" become own properties and survive JSON.stringify.
+    serialized.projects = Object.fromEntries(
+      [...config.projects.entries()].map(([rootPath, entry]) => [rootPath, { disabledAgents: [...entry.disabledAgents] }]),
+    );
+  }
+  return serialized;
 }
 
 export function parseAcpAgents(value: unknown): AcpAgentConfig[] | undefined {
@@ -65,6 +106,23 @@ export function parseAcpAgents(value: unknown): AcpAgentConfig[] | undefined {
     return [{ id, label, command, args, ...(env ? { env } : {}) }];
   });
   return agents.length ? agents : undefined;
+}
+
+export function parseProjects(value: unknown): Map<string, ProjectAgentConfig> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const projects = new Map<string, ProjectAgentConfig>();
+  for (const [rootPath, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!rootPath || !entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (record.disabledAgents === undefined) {
+      projects.set(rootPath, { disabledAgents: [] });
+      continue;
+    }
+    const disabled = parseStringArray(record.disabledAgents);
+    if (!disabled) continue;
+    projects.set(rootPath, { disabledAgents: disabled });
+  }
+  return projects.size ? projects : undefined;
 }
 
 function cleanConfigText(value: unknown, maxLength: number): string | undefined {

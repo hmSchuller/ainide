@@ -7,10 +7,11 @@ interface ProjectSwitcherProps {
   activeProjectId?: string;
   onSwitch: (projectId: string) => void;
   onOpenAnother: () => void;
+  onProjectSettings: () => void;
   onClose: () => void;
 }
 
-export function ProjectSwitcher({ activeName, openProjects, activeProjectId, onSwitch, onOpenAnother, onClose }: ProjectSwitcherProps) {
+export function ProjectSwitcher({ activeName, openProjects, activeProjectId, onSwitch, onOpenAnother, onProjectSettings, onClose }: ProjectSwitcherProps) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -33,6 +34,7 @@ export function ProjectSwitcher({ activeName, openProjects, activeProjectId, onS
             </button>
           ))}
           <button onClick={() => { setOpen(false); onOpenAnother(); }}>Open another…</button>
+          <button onClick={() => { setOpen(false); onProjectSettings(); }}>Project settings…</button>
           <button onClick={() => { setOpen(false); onClose(); }}>Close project</button>
         </div>
       )}

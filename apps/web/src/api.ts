@@ -8,6 +8,7 @@ import type {
   AcpSessionDetail,
   FileEntry,
   GitStatus,
+  ProjectAgentSettings,
   ProjectRef,
   ProjectSessionSnapshot,
   RecentChange,
@@ -226,6 +227,18 @@ export async function getTerminals(token: string): Promise<TerminalSession[]> {
 
 export async function getAcpProviders(token: string): Promise<AcpProviderDescriptor[]> {
   return request<AcpProviderDescriptor[]>("/api/acp/providers", token);
+}
+
+export async function getProjectAgentSettings(token: string, projectId?: string): Promise<ProjectAgentSettings> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  return request<ProjectAgentSettings>(`/api/project/agents${query}`, token);
+}
+
+export async function updateProjectAgentSettings(token: string, rootPath: string, disabledAgents: string[]): Promise<{ ok: boolean; rootPath: string; disabled: string[] }> {
+  return request("/api/project/agents", token, {
+    method: "PATCH",
+    body: JSON.stringify({ rootPath, disabledAgents }),
+  });
 }
 
 export async function getAcpSessions(token: string): Promise<AcpSession[]> {

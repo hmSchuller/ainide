@@ -33,4 +33,16 @@ describe("AcpProviderPicker", () => {
     expect(markup).toContain("Retry");
     expect(markup).not.toContain("No ACP providers configured");
   });
+
+  it("hides a project-disabled provider but still offers the enabled ones", () => {
+    const markup = renderToStaticMarkup(<AcpProviderPicker {...props} disabled={["opencode"]} />);
+    expect(markup).toContain("Cursor");
+    expect(markup).not.toContain("OpenCode");
+  });
+
+  it("shows the all-disabled empty state when every provider is disabled", () => {
+    const markup = renderToStaticMarkup(<AcpProviderPicker {...props} disabled={["cursor", "opencode"]} />);
+    expect(markup).toContain("No ACP providers available for this project");
+    expect(markup).not.toContain("No ACP providers configured");
+  });
 });

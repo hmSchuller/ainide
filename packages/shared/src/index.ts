@@ -88,6 +88,16 @@ export interface AcpProviderDescriptor {
   label: string;
 }
 
+export interface ProjectAgentSettings {
+  all: AcpProviderDescriptor[];
+  disabled: string[];
+}
+
+export interface ProjectAgentSettingsUpdate {
+  rootPath: string;
+  disabledAgents: string[];
+}
+
 export interface AcpAuthMethod {
   id: string;
   label: string;

@@ -343,6 +343,103 @@ describe("project HTTP API", () => {
     }, sessionsPath, configPath);
   });
 
+  it("reads and updates a project's agent banlist, validates input, and persists it", async () => {
+    const root = await tempProject("ainide-api-agents-");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-api-agents-snap-"));
+    const configPath = path.join(dir, "config.json");
+    await writeFile(configPath, JSON.stringify({
+      acpAgents: [
+        { id: "cursor", label: "Cursor", command: "cursor", args: ["acp"] },
+        { id: "opencode", label: "OpenCode", command: "opencode", args: ["acp"] },
+        { id: "gemini", label: "Gemini", command: "gemini", args: ["acp"] },
+      ],
+    }));
+
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      const opened = await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      expect(opened.statusCode).toBe(200);
+      const rootPath = opened.json().activeProjectId as string;
+
+      const read = await server.app.inject({ method: "GET", url: "/api/project/agents", headers });
+      expect(read.statusCode).toBe(200);
+      expect(read.json()).toEqual({
+        all: [
+          { id: "cursor", label: "Cursor" },
+          { id: "opencode", label: "OpenCode" },
+          { id: "gemini", label: "Gemini" },
+        ],
+        disabled: [],
+      });
+
+      const updated = await server.app.inject({
+        method: "PATCH",
+        url: "/api/project/agents",
+        headers,
+        payload: { rootPath, disabledAgents: ["gemini", "not-configured"] },
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json().disabled).toEqual(["gemini"]);
+
+      expect(server.acp.providers(rootPath).map((provider) => provider.id)).toEqual(["cursor", "opencode"]);
+      expect(server.acp.providers().map((provider) => provider.id)).toEqual(["cursor", "opencode", "gemini"]);
+
+      const reread = await server.app.inject({ method: "GET", url: "/api/project/agents", headers });
+      expect(reread.json().disabled).toEqual(["gemini"]);
+
+      const onDisk = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(configPath, "utf8"))) as { projects?: Record<string, { disabledAgents: string[] }> };
+      expect(onDisk.projects?.[rootPath]).toEqual({ disabledAgents: ["gemini"] });
+
+      const unknown = await server.app.inject({
+        method: "PATCH",
+        url: "/api/project/agents",
+        headers,
+        payload: { rootPath: "/not/a/project", disabledAgents: ["gemini"] },
+      });
+      expect(unknown.statusCode).toBe(404);
+      const onDiskAfterUnknown = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(configPath, "utf8"))) as { projects?: Record<string, unknown> };
+      expect(onDiskAfterUnknown.projects?.["/not/a/project"]).toBeUndefined();
+    }, undefined, configPath);
+  });
+
+  it("updates the banlist for a root path with spaces and non-ASCII characters", async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), "ainide-api-special-"));
+    const root = path.join(base, "my proj/ünïcode");
+    await mkdir(root, { recursive: true });
+    await writeFile(path.join(root, "readme.txt"), "special\n");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-api-special-snap-"));
+    const configPath = path.join(dir, "config.json");
+    await writeFile(configPath, JSON.stringify({
+      acpAgents: [
+        { id: "cursor", label: "Cursor", command: "cursor", args: ["acp"] },
+        { id: "gemini", label: "Gemini", command: "gemini", args: ["acp"] },
+      ],
+    }));
+
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      const opened = await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      expect(opened.statusCode).toBe(200);
+      const rootPath = opened.json().activeProjectId as string;
+
+      const updated = await server.app.inject({
+        method: "PATCH",
+        url: "/api/project/agents",
+        headers,
+        payload: { rootPath, disabledAgents: ["gemini"] },
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json().disabled).toEqual(["gemini"]);
+
+      const read = await server.app.inject({ method: "GET", url: "/api/project/agents", headers });
+      expect(read.json().disabled).toEqual(["gemini"]);
+      expect(server.acp.providers(rootPath).map((provider) => provider.id)).toEqual(["cursor"]);
+
+      const onDisk = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(configPath, "utf8"))) as { projects?: Record<string, { disabledAgents: string[] }> };
+      expect(onDisk.projects?.[rootPath]).toEqual({ disabledAgents: ["gemini"] });
+    }, undefined, configPath);
+  });
+
   it("writes activeRootPath when switching projects", async () => {
     const first = await tempProject("ainide-api-pers-a-");
     const second = await tempProject("ainide-api-pers-b-");

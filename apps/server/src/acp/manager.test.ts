@@ -423,4 +423,20 @@ describe("ACP session manager", () => {
     expect(sessions.get(session.id)?.status).toBe("exited");
     await sessions.close();
   });
+
+  it("omits project-disabled providers for that project but keeps them for others and in the full list", () => {
+    const config: AinideConfig = {
+      acpAgents: [
+        { id: "cursor", label: "Cursor", command: "cursor", args: ["acp"] },
+        { id: "opencode", label: "OpenCode", command: "opencode", args: ["acp"] },
+        { id: "gemini", label: "Gemini", command: "gemini", args: ["acp"] },
+      ],
+      projects: new Map([["/project-a", { disabledAgents: ["gemini"] }]]),
+    };
+    const sessions = new AcpSessionManager({ config, onEvent: () => undefined });
+
+    expect(sessions.providers("/project-a").map((provider) => provider.id)).toEqual(["cursor", "opencode"]);
+    expect(sessions.providers("/project-b").map((provider) => provider.id)).toEqual(["cursor", "opencode", "gemini"]);
+    expect(sessions.providers().map((provider) => provider.id)).toEqual(["cursor", "opencode", "gemini"]);
+  });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AcpSession, FileEntry, GitStatus, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
+import type { AcpSession, FileEntry, GitStatus, ProjectAgentSettings, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
-import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getAcpProviders, getGitStatus, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
+import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getGitStatus, getProjectAgentSettings, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, updateProjectAgentSettings, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
 import { EditorSurface, language } from "./components/Editor";
 import { Explorer } from "./components/Explorer";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
@@ -9,6 +9,7 @@ import { ReviewSurface } from "./components/ReviewSurface";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AgentWorkbench } from "./components/AgentWorkbench";
 import { AcpProviderPicker } from "./components/AcpProviderPicker";
+import { ProjectAgentSettingsDialog } from "./components/ProjectAgentSettingsDialog";
 import { LazyGitSurface } from "./components/LazyGitSurface";
 import { ReferenceDock } from "./components/ReferenceDock";
 import { WorkspacePicker } from "./components/WorkspacePicker";
@@ -101,9 +102,10 @@ export default function App() {
   const [searchResults, setSearchResults] = useState<FileEntry[]>([]);
   const [addingProject, setAddingProject] = useState(false);
   const [providerPickerOpen, setProviderPickerOpen] = useState(false);
-  const [providerPickerLoading, setProviderPickerLoading] = useState(false);
-  const [providerPickerError, setProviderPickerError] = useState<string>();
-  const [providerPickerProviders, setProviderPickerProviders] = useState<Awaited<ReturnType<typeof getAcpProviders>>>([]);
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
+  const [agentSettings, setAgentSettings] = useState<ProjectAgentSettings | null>(null);
+  const [agentSettingsLoading, setAgentSettingsLoading] = useState(false);
+  const [agentSettingsError, setAgentSettingsError] = useState<string>();
   const [startingProviderId, setStartingProviderId] = useState<string>();
   const startingProviderRef = useRef<string>();
   const recentProjectsRef = useRef(recentProjects);
@@ -715,31 +717,50 @@ export default function App() {
     }
   };
 
-  const loadAcpProviders = async () => {
+  const loadAgentSettings = async () => {
     if (!token) return;
-    setProviderPickerLoading(true);
-    setProviderPickerError(undefined);
+    setAgentSettingsLoading(true);
+    setAgentSettingsError(undefined);
     try {
-      setProviderPickerProviders(await getAcpProviders(token));
+      setAgentSettings(await getProjectAgentSettings(token));
     } catch (error) {
-      setProviderPickerProviders([]);
-      setProviderPickerError(error instanceof Error ? error.message : "ACP providers could not be loaded");
+      setAgentSettings(null);
+      setAgentSettingsError(error instanceof Error ? error.message : "Agent settings could not be loaded");
     } finally {
-      setProviderPickerLoading(false);
+      setAgentSettingsLoading(false);
     }
   };
 
   const newAgent = () => {
     if (!token) return;
     setProviderPickerOpen(true);
-    void loadAcpProviders();
+    void loadAgentSettings();
+  };
+
+  const openProjectSettings = () => {
+    if (!token) return;
+    setProjectSettingsOpen(true);
+    void loadAgentSettings();
+  };
+
+  const toggleAgentDisabled = async (providerId: string, disabled: boolean) => {
+    if (!token || !activeProjectId || !agentSettings) return;
+    const current = new Set(agentSettings.disabled);
+    if (disabled) current.add(providerId);
+    else current.delete(providerId);
+    try {
+      await updateProjectAgentSettings(token, activeProjectId, [...current]);
+      await loadAgentSettings();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not update agent settings", "error");
+    }
   };
 
   const startAcpProvider = async (providerId: string) => {
     if (!token || startingProviderRef.current) return;
     startingProviderRef.current = providerId;
     setStartingProviderId(providerId);
-    setProviderPickerError(undefined);
+    setAgentSettingsError(undefined);
     try {
       const created = await createAcpSession(providerId, token);
       addAcpSession(created);
@@ -749,7 +770,7 @@ export default function App() {
       }
       setProviderPickerOpen(false);
     } catch (error) {
-      setProviderPickerError(error instanceof Error ? error.message : "ACP agent could not be started");
+      setAgentSettingsError(error instanceof Error ? error.message : "ACP agent could not be started");
     } finally {
       startingProviderRef.current = undefined;
       setStartingProviderId(undefined);
@@ -821,6 +842,7 @@ export default function App() {
         activeProjectId={activeProjectId}
         onSwitch={(projectId) => void switchToOpenProject(projectId).catch((error) => setNotice(error instanceof Error ? error.message : "Could not switch project", "error"))}
         onOpenAnother={() => setAddingProject(true)}
+        onProjectSettings={() => openProjectSettings()}
         onClose={() => void closeActiveProject().catch((error) => setNotice(error instanceof Error ? error.message : "Could not close project", "error"))}
       />
         <div className="mode-switch" role="tablist">{PRIMARY_MODES.map((entry) => {
@@ -881,7 +903,8 @@ export default function App() {
         void openFromPath(path, token).then(() => setAddingProject(false)).catch((error) => setPickerError(error instanceof Error ? error.message : "Could not open workspace")).finally(() => setPickerBusy(false));
       }} />
      </div>}
-    {providerPickerOpen && <AcpProviderPicker providers={providerPickerProviders} loading={providerPickerLoading} error={providerPickerError} startingProviderId={startingProviderId} onRetry={() => void loadAcpProviders()} onSelect={(providerId) => void startAcpProvider(providerId)} onClose={() => setProviderPickerOpen(false)} />}
+    {providerPickerOpen && <AcpProviderPicker providers={agentSettings?.all ?? []} disabled={agentSettings?.disabled ?? []} loading={agentSettingsLoading} error={agentSettingsError} startingProviderId={startingProviderId} onRetry={() => void loadAgentSettings()} onSelect={(providerId) => void startAcpProvider(providerId)} onClose={() => setProviderPickerOpen(false)} />}
+    {projectSettingsOpen && <ProjectAgentSettingsDialog settings={agentSettings} loading={agentSettingsLoading} error={agentSettingsError} onRetry={() => void loadAgentSettings()} onToggle={(providerId, disabled) => void toggleAgentDisabled(providerId, disabled)} onClose={() => setProjectSettingsOpen(false)} />}
     {(paletteOpen || quickOpen) && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) { setPaletteOpen(false); setQuickOpen(false); } }}>
       <div className="command-modal">
         <div className="command-input"><span>{quickOpen ? "⌕" : "⌘"}</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={quickOpen ? "Search files..." : "Type a command..."} onKeyDown={(event) => { if (event.key === "Escape") { setQuickOpen(false); setPaletteOpen(false); } }} /></div>

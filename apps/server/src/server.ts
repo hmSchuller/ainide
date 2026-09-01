@@ -10,7 +10,7 @@ import { ReviewManager } from "./review.js";
 import { TerminalError, TerminalManager } from "./terminals.js";
 import { ProjectRegistry } from "./projects.js";
 import { listDirectoryChildren } from "./directory-picker.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, saveConfig } from "./config.js";
 import { loadSessionSnapshot, saveSessionSnapshot } from "./sessions.js";
 import { WorkspaceManager } from "./workspace.js";
 import { createAcpResourceHandlers } from "./acp/bridges.js";
@@ -395,7 +395,38 @@ export async function createServer(): Promise<AinideServer> {
     if (!projects.activeId || session.projectId !== projects.activeId) throw new AcpSessionError(409, "ACP session does not belong to the active project");
     return session;
   };
-  app.get("/api/acp/providers", async () => acp.providers());
+  app.get("/api/acp/providers", async () => acp.providers(projects.activeId));
+  app.get("/api/project/agents", async (request, reply) => {
+    const requested = (request.query as { projectId?: unknown }).projectId;
+    const rootPath = typeof requested === "string" && requested ? requested : projects.activeId;
+    if (!rootPath) return reply.code(409).send({ error: "No project is active" });
+    if (typeof requested === "string" && requested && !projects.isKnownOrOpen(rootPath)) {
+      return reply.code(404).send({ error: "Project is not known or open" });
+    }
+    const all = (config.acpAgents ?? []).map(({ id, label }) => ({ id, label }));
+    const disabled = config.projects?.get(rootPath)?.disabledAgents ?? [];
+    return { all, disabled };
+  });
+  app.patch("/api/project/agents", async (request, reply) => {
+    const values = body(request);
+    const rootPath = values.rootPath;
+    const disabledAgents = values.disabledAgents;
+    if (typeof rootPath !== "string" || !rootPath) return reply.code(400).send({ error: "rootPath must be a non-empty string" });
+    if (!Array.isArray(disabledAgents) || disabledAgents.some((item) => typeof item !== "string")) {
+      return reply.code(400).send({ error: "disabledAgents must be an array of strings" });
+    }
+    if (!projects.isKnownOrOpen(rootPath)) return reply.code(404).send({ error: "Project is not known or open" });
+    const configuredIds = new Set((config.acpAgents ?? []).map((agent) => agent.id));
+    const effective = [...new Set(disabledAgents.filter((id) => configuredIds.has(id)))];
+    if (!config.projects) config.projects = new Map();
+    config.projects.set(rootPath, { disabledAgents: effective });
+    try {
+      await saveConfig(config);
+    } catch (error) {
+      return reply.code(500).send({ error: error instanceof Error ? error.message : "Unable to save configuration" });
+    }
+    return { ok: true, rootPath, disabled: effective };
+  });
   app.get("/api/acp/sessions", async () => projects.activeId ? acp.list(projects.activeId) : []);
   app.get("/api/acp/sessions/:id", async (request, reply) => {
     try {

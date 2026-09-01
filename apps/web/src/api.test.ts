@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { acpEventsUrl, createAcpSession, getAcpProviders, getGitStatus, getWorkspaceDirectoryChildren, parseAcpEvent, promptAcpSession } from "./api";
+import { acpEventsUrl, createAcpSession, getAcpProviders, getGitStatus, getProjectAgentSettings, getWorkspaceDirectoryChildren, parseAcpEvent, promptAcpSession, updateProjectAgentSettings } from "./api";
 
 describe("ACP web API", () => {
   beforeEach(() => {
@@ -26,6 +26,29 @@ describe("ACP web API", () => {
     expect(url).toContain("/api/acp/sessions/session-1/prompt");
     expect((init.headers as Record<string, string>)["x-session-token"]).toBe("token-1");
     expect(JSON.parse(String(init.body))).toEqual({ text: "Hello", context: [{ path: "src/a.ts", content: "code", startLine: 2, endLine: 2 }] });
+  });
+
+  it("reads and updates a project's agent settings", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/project/agents") && init?.method !== "PATCH") {
+        return new Response(JSON.stringify({ all: [{ id: "cursor", label: "Cursor" }], disabled: ["cursor"] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ ok: true, rootPath: "/proj", disabled: ["cursor"] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const settings = await getProjectAgentSettings("token-1");
+    expect(settings).toEqual({ all: [{ id: "cursor", label: "Cursor" }], disabled: ["cursor"] });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/project/agents");
+
+    const updated = await updateProjectAgentSettings("token-1", "/proj", ["cursor"]);
+    expect(updated).toEqual({ ok: true, rootPath: "/proj", disabled: ["cursor"] });
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(url).toBe("/api/project/agents");
+    expect(init.method).toBe("PATCH");
+    expect((init.headers as Record<string, string>)["x-session-token"]).toBe("token-1");
+    expect(JSON.parse(String(init.body))).toEqual({ rootPath: "/proj", disabledAgents: ["cursor"] });
   });
 
   it("rejects malformed event payloads without throwing", () => {

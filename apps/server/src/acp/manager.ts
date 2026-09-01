@@ -110,8 +110,12 @@ export class AcpSessionManager {
     for (const preference of parseAcpProviderPreferences(options.initialPreferences) ?? []) this.providerPreferenceValues.set(preference.providerId, new Map(Object.entries(preference.values)));
   }
 
-  providers(): AcpProviderDescriptor[] {
-    return (this.options.config.acpAgents ?? []).map(({ id, label }) => ({ id, label }));
+  providers(rootPath?: string): AcpProviderDescriptor[] {
+    const disabled = rootPath ? this.options.config.projects?.get(rootPath)?.disabledAgents : undefined;
+    const disabledIds = disabled ? new Set(disabled) : new Set<string>();
+    return (this.options.config.acpAgents ?? [])
+      .filter(({ id }) => !disabledIds.has(id))
+      .map(({ id, label }) => ({ id, label }));
   }
 
   list(projectId?: string): AcpSession[] {
