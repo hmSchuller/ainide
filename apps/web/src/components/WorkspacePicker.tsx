@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEventHandler, type KeyboardEventHandler } from "react";
 import type { ProjectRef, WorkspaceDirectoryChild } from "@ainide/shared";
 import { getWorkspaceDirectoryChildren } from "../api";
 import { displayWorkspacePath, isAbsoluteWorkspacePath, workspacePathCompletion } from "../workspace-path";
@@ -14,6 +14,58 @@ export interface WorkspacePickerProps {
 function pathKey(value: string): string {
   const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "") || "/";
   return /^[A-Za-z]:\//.test(normalized) || normalized.startsWith("//") ? normalized.toLowerCase() : normalized;
+}
+
+export interface WorkspacePickerManualEntryProps {
+  path: string;
+  suggestions: WorkspaceDirectoryChild[];
+  activeSuggestion: number;
+  pathError?: string;
+  onChange: ChangeEventHandler<HTMLInputElement>;
+  onKeyDown: KeyboardEventHandler<HTMLInputElement>;
+  onSuggestionSelect: (path: string) => void;
+}
+
+export function WorkspacePickerManualEntry({
+  path,
+  suggestions,
+  activeSuggestion,
+  pathError,
+  onChange,
+  onKeyDown,
+  onSuggestionSelect,
+}: WorkspacePickerManualEntryProps) {
+  return (
+    <div className="picker-manual-entry">
+      <label className="field-label" htmlFor="workspace-path">Directory path</label>
+      <div className="path-entry picker-path-entry">
+        <input
+          id="workspace-path"
+          autoFocus
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="workspace-path-suggestions"
+          aria-expanded={suggestions.length > 0}
+          aria-activedescendant={activeSuggestion >= 0 ? `workspace-path-suggestion-${activeSuggestion}` : undefined}
+          value={path}
+          onChange={onChange}
+          onKeyDown={onKeyDown}
+          placeholder="~/src/project or /Users/you/src/project"
+          spellCheck={false}
+        />
+        {suggestions.length > 0 && (
+          <ul id="workspace-path-suggestions" className="picker-suggestions" role="listbox" aria-label="Directory suggestions">
+            {suggestions.map((suggestion, index) => (
+              <li key={suggestion.path} id={`workspace-path-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion}>
+                <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => onSuggestionSelect(suggestion.path)}>{suggestion.name}</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {pathError && <div className="error-box">{pathError}</div>}
+    </div>
+  );
 }
 
 export function WorkspacePicker({ token, recentProjects = [], busy, error, onOpen }: WorkspacePickerProps) {
@@ -167,6 +219,43 @@ export function WorkspacePicker({ token, recentProjects = [], busy, error, onOpe
           </div>
         )}
 
+        <WorkspacePickerManualEntry
+          path={path}
+          suggestions={suggestions}
+          activeSuggestion={activeSuggestion}
+          pathError={pathError}
+          onChange={(event) => { setPath(event.target.value); setValidationError(undefined); setBrowseError(undefined); setSuggestionError(undefined); }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" && suggestions.length) {
+              event.preventDefault();
+              setActiveSuggestion((index) => (index + 1) % suggestions.length);
+            } else if (event.key === "ArrowUp" && suggestions.length) {
+              event.preventDefault();
+              setActiveSuggestion((index) => (index <= 0 ? suggestions.length - 1 : index - 1));
+            } else if (event.key === "Tab" && activeSuggestion >= 0) {
+              const suggestion = suggestions[activeSuggestion];
+              if (suggestion) {
+                event.preventDefault();
+                suppressSuggestions.current = true;
+                setPath(displayWorkspacePath(suggestion.path, homePath));
+                setSuggestions([]);
+                setActiveSuggestion(-1);
+              }
+            } else if (event.key === "Enter") {
+              event.preventDefault();
+              if (activeSuggestion >= 0 && suggestions[activeSuggestion]) navigate(suggestions[activeSuggestion].path);
+              else if (exactSuggestion) navigate(exactSuggestion.path);
+              else navigateTypedPath();
+            }
+          }}
+          onSuggestionSelect={navigate}
+        />
+        <button className="primary-button open-button" onClick={() => submit()} disabled={busy || !path.trim()}>
+          {busy ? "Opening workspace..." : "Open project"}
+          <span>↵</span>
+        </button>
+        <p className="picker-hint">Browse one folder at a time, or enter a path manually. The server validates it as a directory.</p>
+
         <div className="picker-navigation">
           <div className="picker-current-path">
             <span className="field-label">Current directory</span>
@@ -194,61 +283,6 @@ export function WorkspacePicker({ token, recentProjects = [], busy, error, onOpe
             </ul>
           )}
         </div>
-
-        <label className="field-label" htmlFor="workspace-path">Directory path</label>
-        <div className="path-entry picker-path-entry">
-          <input
-            id="workspace-path"
-            autoFocus
-            role="combobox"
-            aria-autocomplete="list"
-            aria-controls="workspace-path-suggestions"
-            aria-expanded={suggestions.length > 0}
-            aria-activedescendant={activeSuggestion >= 0 ? `workspace-path-suggestion-${activeSuggestion}` : undefined}
-            value={path}
-            onChange={(event) => { setPath(event.target.value); setValidationError(undefined); setBrowseError(undefined); setSuggestionError(undefined); }}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown" && suggestions.length) {
-                event.preventDefault();
-                setActiveSuggestion((index) => (index + 1) % suggestions.length);
-              } else if (event.key === "ArrowUp" && suggestions.length) {
-                event.preventDefault();
-                setActiveSuggestion((index) => (index <= 0 ? suggestions.length - 1 : index - 1));
-              } else if (event.key === "Tab" && activeSuggestion >= 0) {
-                const suggestion = suggestions[activeSuggestion];
-                if (suggestion) {
-                  event.preventDefault();
-                  suppressSuggestions.current = true;
-                  setPath(displayWorkspacePath(suggestion.path, homePath));
-                  setSuggestions([]);
-                  setActiveSuggestion(-1);
-                }
-              } else if (event.key === "Enter") {
-                event.preventDefault();
-                if (activeSuggestion >= 0 && suggestions[activeSuggestion]) navigate(suggestions[activeSuggestion].path);
-                else if (exactSuggestion) navigate(exactSuggestion.path);
-                else navigateTypedPath();
-              }
-            }}
-            placeholder="~/src/project or /Users/you/src/project"
-            spellCheck={false}
-          />
-          {suggestions.length > 0 && (
-            <ul id="workspace-path-suggestions" className="picker-suggestions" role="listbox" aria-label="Directory suggestions">
-              {suggestions.map((suggestion, index) => (
-                <li key={suggestion.path} id={`workspace-path-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion}>
-                  <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => navigate(suggestion.path)}>{suggestion.name}</button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        {pathError && <div className="error-box">{pathError}</div>}
-        <button className="primary-button open-button" onClick={() => submit()} disabled={busy || !path.trim()}>
-          {busy ? "Opening workspace..." : "Open project"}
-          <span>↵</span>
-        </button>
-        <p className="picker-hint">Browse one folder at a time, or enter a path manually. The server validates it as a directory.</p>
       </section>
     </main>
   );
