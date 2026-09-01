@@ -5,6 +5,7 @@ import type { ReferenceItem } from "./references";
 import { applyAcpServerEvent, type AcpClientState } from "./acp-state";
 import { captureProjectBag, emptyPanes, emptyProjectBag, type AcpPromptDraft, type ProjectUiBag } from "./project-ui";
 import { persistTerminalCollapsed, readTerminalCollapsedPreference } from "./layout-prefs";
+import { language } from "./file-language";
 
 interface AppState {
   token: string;
@@ -340,7 +341,7 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   renameTabPath: (from, to) => set((current) => {
     const name = to.split(/[\\/]/).filter(Boolean).pop() ?? to;
-    const tabs = current.tabs.map((tab) => (tab.path === from ? { ...tab, path: to, name } : tab));
+    const tabs = current.tabs.map((tab) => (tab.path === from ? { ...tab, path: to, name, language: language(to) } : tab));
     const panes = (Object.keys(current.panes) as EditorPaneId[]).reduce<Record<EditorPaneId, EditorPaneState>>((next, paneId) => {
       const pane = current.panes[paneId];
       next[paneId] = {

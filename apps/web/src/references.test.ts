@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { appendReferenceItems, captureFileReference, captureMentionedFileReference, captureSelectionReference, captureTextFileReference, copyReferenceKit, promptContextFromReferences, removeGeneratedReferenceMention, serializeReference, serializeReferenceKit } from "./references";
+import { language } from "./file-language";
 
 describe("references", () => {
   it("normalizes a selection to inclusive complete lines", () => {
@@ -31,6 +32,25 @@ describe("references", () => {
     expect(text).toContain("z.ts (whole file)");
     expect(text).toContain("````typescript");
     expect(serializeReferenceKit([first, second])).toBe(`${serializeReference(first)}\n\n${serializeReference(second)}`);
+  });
+
+  it("preserves Swift and Kotlin language IDs in references and ACP context", () => {
+    const sources = [
+      { path: "Sources/App.swift", content: "let app = true", expectedLanguage: "swift" },
+      { path: "src/Main.kt", content: "val main = true", expectedLanguage: "kotlin" },
+      { path: "build.gradle.kts", content: "val build = true", expectedLanguage: "kotlin" },
+    ];
+
+    for (const source of sources) {
+      const languageId = language(source.path);
+      const file = captureFileReference({ path: source.path, content: source.content, language: languageId });
+      const selection = captureSelectionReference({ path: source.path, content: source.content, language: languageId, selection: { startLineNumber: 1, endLineNumber: 1 } });
+
+      expect(file.language).toBe(source.expectedLanguage);
+      expect(selection.language).toBe(source.expectedLanguage);
+      expect(serializeReference(file)).toContain(`\`\`\`${source.expectedLanguage}`);
+      expect(promptContextFromReferences([selection])).toEqual([{ path: source.path, content: source.content, language: source.expectedLanguage, startLine: 1, endLine: 1 }]);
+    }
   });
 
   it("does not consume a kit when clipboard writes fail or repeat", async () => {

@@ -35,6 +35,36 @@ describe("store tab rename", () => {
     expect(state.panes.primary.activePath).toBe("src/new.ts");
     expect(findPaneForPath(state.panes, "src/new.ts")).toBe("primary");
   });
+
+  it("updates language across Swift and Kotlin renames without disturbing the open buffer", () => {
+    useAppStore.setState({
+      tabs: [{ path: "src/old.txt", name: "old.txt", content: "unsaved", savedContent: "saved", language: "plaintext", conflict: { externalContent: "external" } }],
+      panes: {
+        primary: { tabPaths: [], activePath: undefined },
+        secondary: { tabPaths: ["src/old.txt"], activePath: "src/old.txt" },
+      },
+      secondaryOpen: true,
+      focusedPaneId: "secondary",
+    });
+
+    const expectOpenTab = (path: string, languageId: string) => {
+      const state = useAppStore.getState();
+      expect(state.tabs).toEqual([{ path, name: path.split("/").pop(), content: "unsaved", savedContent: "saved", language: languageId, conflict: { externalContent: "external" } }]);
+      expect(state.panes).toEqual({
+        primary: { tabPaths: [], activePath: undefined },
+        secondary: { tabPaths: [path], activePath: path },
+      });
+    };
+
+    useAppStore.getState().renameTabPath("src/old.txt", "src/App.swift");
+    expectOpenTab("src/App.swift", "swift");
+    useAppStore.getState().renameTabPath("src/App.swift", "src/Main.kt");
+    expectOpenTab("src/Main.kt", "kotlin");
+    useAppStore.getState().renameTabPath("src/Main.kt", "src/build.gradle.kts");
+    expectOpenTab("src/build.gradle.kts", "kotlin");
+    useAppStore.getState().renameTabPath("src/build.gradle.kts", "src/notes.txt");
+    expectOpenTab("src/notes.txt", "plaintext");
+  });
 });
 
 describe("terminal panel state", () => {
