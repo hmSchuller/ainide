@@ -1,7 +1,6 @@
 import type { ProjectRef, Workspace } from "@ainide/shared";
 
 export const RECENT_PROJECTS_KEY = "ainide:recent-projects";
-export const LAST_WORKSPACE_KEY = "ainide:last-workspace";
 
 type StorageReader = Pick<Storage, "getItem">;
 type StorageWriter = Pick<Storage, "setItem">;
@@ -59,25 +58,6 @@ export function writeRecentProjects(projects: readonly ProjectRef[], storage: St
   if (!storage) return;
   try {
     storage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(deduplicateRecentProjects(projects.filter(isRecentProject))));
-  } catch {
-    // Browser storage is optional convenience metadata.
-  }
-}
-
-export function readLastWorkspace(storage: StorageReader | undefined = browserStorage()): string | null {
-  if (!storage) return null;
-  try {
-    const value = storage.getItem(LAST_WORKSPACE_KEY);
-    return nonEmptyString(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-export function writeLastWorkspace(rootPath: string, storage: StorageWriter | undefined = browserStorage()): void {
-  if (!storage || !nonEmptyString(rootPath)) return;
-  try {
-    storage.setItem(LAST_WORKSPACE_KEY, rootPath);
   } catch {
     // Browser storage is optional convenience metadata.
   }

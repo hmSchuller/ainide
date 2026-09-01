@@ -15,9 +15,11 @@ import type {
   ReviewStatus,
   TerminalSession,
   Workspace,
+  WorkspaceDirectoryChildrenResponse,
   WorkspaceEvent,
 } from "@ainide/shared";
 import type { SessionResponse, TerminalResponse } from "./types";
+import { isAbsoluteWorkspacePath } from "./workspace-path";
 
 export class ApiError extends Error {
   status: number;
@@ -80,6 +82,40 @@ export async function openWorkspace(path: string, token: string): Promise<Worksp
     }),
   );
 }
+
+function validateDirectoryChildren(value: unknown): WorkspaceDirectoryChildrenResponse {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Malformed directory response: expected an object");
+  const result = value as Record<string, unknown>;
+  for (const field of ["currentPath", "parentPath", "homePath"]) {
+    if (typeof result[field] !== "string" || !isAbsoluteWorkspacePath(result[field])) {
+      throw new Error(`Malformed directory response: ${field} must be an absolute path`);
+    }
+  }
+  if (!Array.isArray(result.children)) throw new Error("Malformed directory response: children must be an array");
+  const children = result.children.map((child, index) => {
+    if (!child || typeof child !== "object" || Array.isArray(child)) throw new Error(`Malformed directory response: child ${index} must be an object`);
+    const entry = child as Record<string, unknown>;
+    if (typeof entry.name !== "string" || !entry.name || typeof entry.path !== "string" || !isAbsoluteWorkspacePath(entry.path)) {
+      throw new Error(`Malformed directory response: child ${index} must contain a name and absolute path`);
+    }
+    return { name: entry.name, path: entry.path };
+  });
+  return { currentPath: result.currentPath as string, parentPath: result.parentPath as string, homePath: result.homePath as string, children };
+}
+
+export async function getWorkspaceDirectoryChildren(path: string, token: string, query?: string): Promise<WorkspaceDirectoryChildrenResponse> {
+  const params = new URLSearchParams({ path });
+  if (query !== undefined) params.set("query", query);
+  try {
+    const result = await request<unknown>(`/api/workspace/children?${params.toString()}`, token);
+    return validateDirectoryChildren(result);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Malformed directory response: invalid JSON");
+    throw error;
+  }
+}
+
+export const listDirectoryChildren = getWorkspaceDirectoryChildren;
 
 export interface ProjectMutationResponse {
   workspace: Workspace | null;

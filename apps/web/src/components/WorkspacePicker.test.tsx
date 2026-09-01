@@ -18,11 +18,14 @@ describe("WorkspacePicker", () => {
     expect(markup).not.toContain("server-global-project");
   });
 
-  it("keeps manual entry and the last-workspace hint when recents are empty", () => {
-    const markup = renderToStaticMarkup(<WorkspacePicker initialPath="/old/workspace" recentProjects={[]} busy={false} onOpen={() => undefined} />);
+  it("starts every session at home while keeping manual entry available", () => {
+    const markup = renderToStaticMarkup(<WorkspacePicker recentProjects={[]} busy={false} onOpen={() => undefined} />);
 
     expect(markup).not.toContain("Recent projects");
-    expect(markup).toContain('value="/old/workspace"');
-    expect(markup).toContain('placeholder="/Users/you/src/project"');
+    expect(markup).toContain("<code>~</code>");
+    expect(markup).toContain('role="combobox"');
+    expect(markup).toContain('value="~"');
+    expect(markup).toContain('placeholder="~/src/project or /Users/you/src/project"');
+    expect(markup).toContain("Open project");
   });
 });

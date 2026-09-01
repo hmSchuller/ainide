@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -107,6 +107,65 @@ describe("project HTTP API", () => {
       server.projects.activeManager?.onEvent((event) => events.push(event));
       await server.projects.requireActive().refreshGit();
       expect(events.some((event) => event.type === "git_changed" && event.projectId === server.projects.activeId)).toBe(true);
+    });
+  });
+
+  it("browses immediate directory children without project side effects", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ainide-picker-"));
+    const child = path.join(root, "child");
+    const hidden = path.join(root, ".hidden");
+    const nested = path.join(child, "nested");
+    const linkTarget = await mkdtemp(path.join(os.tmpdir(), "ainide-picker-link-target-"));
+    await mkdir(nested, { recursive: true });
+    await mkdir(hidden);
+    await writeFile(path.join(root, "file.txt"), "not returned");
+    const link = path.join(root, "linked");
+    await symlink(linkTarget, link);
+
+    await withServer(async (server) => {
+      const url = `/api/workspace/children?path=${encodeURIComponent(root)}`;
+      expect((await server.app.inject({ method: "GET", url })).statusCode).toBe(401);
+      const before = { active: server.projects.activeId, known: server.projects.knownProjects() };
+      const response = await server.app.inject({ method: "GET", url, headers: auth(server.token, false) });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        currentPath: await realpath(root),
+        parentPath: await realpath(path.dirname(root)),
+        homePath: await realpath(os.homedir()),
+        children: [
+          { name: ".hidden", path: await realpath(hidden) },
+          { name: "child", path: await realpath(child) },
+          { name: "linked", path: await realpath(linkTarget) },
+        ],
+      });
+      expect(server.projects.activeId).toBe(before.active);
+      expect(server.projects.knownProjects()).toEqual(before.known);
+
+      const filtered = await server.app.inject({
+        method: "GET",
+        url: `${url}&query=child`,
+        headers: auth(server.token, false),
+      });
+      expect(filtered.statusCode).toBe(200);
+      expect(filtered.json().children).toEqual([{ name: "child", path: await realpath(child) }]);
+      expect(filtered.json().children[0].path).not.toContain("nested");
+    });
+  });
+
+  it("rejects invalid directory browsing paths", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ainide-picker-errors-"));
+    const file = path.join(root, "file.txt");
+    await writeFile(file, "file");
+    await withServer(async (server) => {
+      const headers = auth(server.token, false);
+      for (const requestedPath of [file, path.join(root, "missing"), "relative/path", "~other-user"]) {
+        const response = await server.app.inject({
+          method: "GET",
+          url: `/api/workspace/children?path=${encodeURIComponent(requestedPath)}`,
+          headers,
+        });
+        expect(response.statusCode).toBe(400);
+      }
     });
   });
 

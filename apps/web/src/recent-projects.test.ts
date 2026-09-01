@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deduplicateRecentProjects, projectRefFromMutation, readLastWorkspace, readRecentProjects, rememberRecentProject, writeRecentProjects } from "./recent-projects";
+import { deduplicateRecentProjects, projectRefFromMutation, readRecentProjects, rememberRecentProject, writeRecentProjects } from "./recent-projects";
 import type { ProjectRef } from "@ainide/shared";
 
 function profileStorage(initial: Record<string, string> = {}) {
@@ -63,7 +63,7 @@ describe("recent project storage", () => {
     expect(readRecentProjects(storage)).toEqual([project("/first"), project("/second")]);
   });
 
-  it("does not throw when recent or last-workspace writes fail", () => {
+  it("does not throw when recent-project writes fail", () => {
     const storage = {
       getItem: () => null,
       setItem: () => { throw new Error("quota exceeded"); },
@@ -72,6 +72,5 @@ describe("recent project storage", () => {
     expect(() => writeRecentProjects([project("/project")], storage)).not.toThrow();
     expect(() => writeRecentProjects([project("/project")], undefined)).not.toThrow();
     expect(() => writeRecentProjects([project("/project")], storage)).not.toThrow();
-    expect(() => readLastWorkspace({ getItem: () => { throw new Error("storage unavailable"); } })).not.toThrow();
   });
 });

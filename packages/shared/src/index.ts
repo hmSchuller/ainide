@@ -19,6 +19,18 @@ export interface FileEntry {
   recent?: boolean;
 }
 
+export interface WorkspaceDirectoryChild {
+  name: string;
+  path: string;
+}
+
+export interface WorkspaceDirectoryChildrenResponse {
+  currentPath: string;
+  parentPath: string;
+  homePath: string;
+  children: WorkspaceDirectoryChild[];
+}
+
 export interface GitFileStatus {
   path: string;
   status: GitFileStatusKind;

@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { FileEntry, GitStatus, RecentChange, Workspace, WorkspaceEvent } from "@ainide/shared";
 import { getGitStatus } from "./git.js";
-import { resolveSafePath } from "./path-resolver.js";
+import { normalizeWorkspacePath, resolveSafePath } from "./path-resolver.js";
 
 const ignoredNames = new Set([".git", "node_modules", "dist", "build", ".next"]);
 
@@ -38,10 +38,7 @@ export class WorkspaceManager {
   }
 
   async validate(rawPath: string): Promise<string> {
-    const resolved = await fs.realpath(path.resolve(rawPath));
-    const stat = await fs.stat(resolved);
-    if (!stat.isDirectory()) throw new Error("Workspace path must be an existing directory");
-    return resolved;
+    return normalizeWorkspacePath(rawPath);
   }
 
   async open(rawPath: string): Promise<Workspace> {

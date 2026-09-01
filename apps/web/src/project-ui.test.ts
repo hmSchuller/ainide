@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EditorTab } from "./types";
-import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, recentProjectSeed, snapshotFromBag } from "./project-ui";
+import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, snapshotFromBag } from "./project-ui";
 
 function tab(overrides: Partial<EditorTab> = {}): EditorTab {
   return { path: "src/a.ts", name: "a.ts", content: "clean", savedContent: "clean", language: "typescript", ...overrides };
@@ -60,11 +60,6 @@ describe("project UI bags", () => {
     });
     expect(next[0]).toMatchObject({ path: "image.png", content: "clean", binary: true });
     expect(next[1]).toMatchObject({ path: "missing.ts", content: "clean", error: "File deleted on disk" });
-  });
-
-  it("seeds the picker from last-workspace only when no recent projects exist", () => {
-    expect(recentProjectSeed([], "/old/path")).toBe("/old/path");
-    expect(recentProjectSeed([{ projectId: "/recent", rootPath: "/recent", name: "recent" }], "/old/path")).toBe("/recent");
   });
 
   it("keeps reference kits isolated in bags but excludes them from disk snapshots", () => {

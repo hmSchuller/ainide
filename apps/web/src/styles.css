@@ -36,13 +36,35 @@ kbd { color: #929dad; border: 1px solid #343c48; border-radius: 4px; padding: 1p
 .brand-mark span { color: var(--mint); }
 .loading-line { color: var(--muted); font-size: 12px; }
 .picker-card { width: min(440px, calc(100% - 36px)); padding: 38px; background: rgba(19, 24, 31, .92); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 24px 90px #0008; }
+.workspace-picker-card { width: min(600px, calc(100% - 36px)); max-height: calc(100% - 36px); overflow: auto; }
 .picker-card .brand-mark { margin-bottom: 46px; }
 .picker-card h1 { margin: 9px 0 10px; font-size: 25px; letter-spacing: -.04em; }
 .picker-copy { font-size: 13px; line-height: 1.55; margin: 0 0 28px; }
 .field-label { display: block; color: #aeb8c4; font-size: 11px; font-weight: 700; margin-bottom: 8px; }
-.path-entry { display: flex; align-items: center; background: #0c0f13; border: 1px solid #37414d; border-radius: 6px; padding: 0 12px; }
+.path-entry { position: relative; display: flex; align-items: center; background: #0c0f13; border: 1px solid #37414d; border-radius: 6px; padding: 0 12px; }
 .path-prefix { color: var(--mint); font-size: 13px; }
 .path-entry input { width: 100%; min-width: 0; color: var(--text); background: transparent; border: 0; padding: 12px 4px; outline: 0; font-size: 13px; }
+.picker-recent { margin-bottom: 22px; }
+.picker-navigation { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 10px 11px; border: 1px solid #29343f; border-radius: 6px; background: #12181e; }
+.picker-current-path { min-width: 0; }
+.picker-current-path .field-label { margin-bottom: 4px; }
+.picker-current-path code { display: block; overflow: hidden; color: var(--mint); text-overflow: ellipsis; white-space: nowrap; font: 12px "SFMono-Regular", Menlo, monospace; }
+.picker-navigation-actions { display: flex; flex: 0 0 auto; gap: 5px; }
+.picker-navigation-actions button { color: #aab6c2; border: 1px solid #35424e; border-radius: 4px; background: #1a222a; padding: 6px 8px; font-size: 10px; }
+.picker-navigation-actions button:hover:not(:disabled) { color: var(--mint); border-color: #4e8c73; }
+.picker-navigation-actions button:disabled { cursor: not-allowed; opacity: .4; }
+.picker-folders { min-height: 58px; max-height: 190px; overflow: auto; margin-bottom: 17px; border: 1px solid #29343f; border-radius: 6px; background: #0f1419; }
+.picker-state { padding: 18px 11px; color: #748190; font-size: 11px; text-align: center; }
+.picker-folders .error-box { margin: 0; border: 0; border-radius: 0; }
+.folder-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 3px; margin: 0; padding: 5px; list-style: none; }
+.folder-list button { display: block; width: 100%; overflow: hidden; padding: 8px 9px; color: #c6d1db; border-radius: 4px; background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.folder-list button span { margin-right: 7px; color: #d0ae6e; }
+.folder-list button:hover { color: #fff; background: #1c2928; }
+.picker-path-entry { z-index: 2; }
+.picker-suggestions { position: absolute; z-index: 4; top: calc(100% + 5px); right: 0; left: 0; max-height: 190px; overflow: auto; margin: 0; padding: 4px; border: 1px solid #3a4b52; border-radius: 5px; background: #151d22; box-shadow: 0 12px 30px #000b; list-style: none; }
+.picker-suggestions li { margin: 0; }
+.picker-suggestions button { width: 100%; padding: 8px 9px; color: #cbd6df; border-radius: 3px; background: transparent; text-align: left; font-size: 11px; }
+.picker-suggestions button:hover, .picker-suggestions [aria-selected="true"] button { color: #fff; background: #21352f; }
 .primary-button { background: var(--mint); color: #0b241c; font-size: 12px; font-weight: 800; border-radius: 5px; padding: 11px 14px; }
 .primary-button:disabled { opacity: .45; cursor: not-allowed; }
 .open-button { display: flex; justify-content: space-between; width: 100%; margin-top: 17px; }
@@ -234,4 +256,17 @@ kbd { color: #929dad; border: 1px solid #343c48; border-radius: 4px; padding: 1p
 
 @media (max-width: 760px) {
   .topbar { gap: 8px; padding: 0 10px; }.mobile-menu { display: block; }.top-brand { font-size: 12px; }.project-switcher-toggle b, .command-button span, .agent-activity { display: none; }.mode-switch { margin-left: auto; max-width: 100%; }.mode-switch button { padding: 0 7px; font-size: 11px; }.top-actions { margin-left: 0; gap: 7px; }.command-button { font-size: 0; border: 0; padding: 5px; }.command-button:first-letter { font-size: 15px; }.git-summary { font-size: 10px; }.explorer-wrap { position: absolute; z-index: 8; top: 0; bottom: 0; left: 0; transform: translateX(-100%); transition: transform .2s; box-shadow: 10px 0 28px #0008; }.mobile-sidebar-open .explorer-wrap { transform: translateX(0); }.explorer-splitter { display: none; }.conflict-banner { align-items: flex-start; flex-direction: column; gap: 7px; }.editor-toolbar > span:first-child { max-width: 45%; }.editor-area.split .editor-layout { overflow-x: auto; scroll-snap-type: x mandatory; }.editor-area.split .editor-pane-slot { flex: 0 0 100%; min-width: 100%; scroll-snap-align: start; }.editor-area.split .editor-divider { display: none; }.picker-card { padding: 28px 23px; }.picker-card .brand-mark { margin-bottom: 34px; }.review-header { align-items: flex-start; flex-direction: column; padding: 12px 13px; }.review-controls { width: 100%; }.review-controls select { flex: 1; }.reference-dock { max-height: 205px; padding: 8px 10px; }.reference-controls { flex-wrap: wrap; }.reference-buttons { width: 100%; margin-left: 0; }.reference-buttons button { flex: 1; }.agent-workbench { display: block; overflow: auto; }.agent-navigator { width: 100%; min-height: 255px; border-right: 0; border-bottom: 1px solid #29323d; }.agent-navigator-body { max-height: 220px; }.agent-target { position: sticky; bottom: 0; background: #11161c; }.agent-stage { min-height: 430px; padding: 8px; }.agent-terminal-grid.split { grid-template-columns: minmax(0, 1fr); }.agent-terminal-card { min-height: 360px; }.agent-tool-card { height: 170px; flex-basis: 170px; }
+}
+
+@media (max-width: 760px) {
+  .workspace-picker-card { width: min(100% - 20px, 600px); max-height: calc(100% - 20px); }
+  .picker-navigation { align-items: stretch; flex-direction: column; }
+  .picker-navigation-actions { width: 100%; }
+  .picker-navigation-actions button { flex: 1; }
+  .folder-list { grid-template-columns: 1fr; }
+  .picker-folders { max-height: 180px; }
+}
+
+@media (min-width: 761px) {
+  .workspace-picker-card .picker-path-entry input { min-height: 42px; }
 }

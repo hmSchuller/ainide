@@ -1,4 +1,5 @@
 import { promises as fs, realpathSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export class UnsafePathError extends Error {
@@ -6,6 +7,28 @@ export class UnsafePathError extends Error {
     super(message);
     this.name = "UnsafePathError";
   }
+}
+
+/** Expand supported home shorthand without invoking a shell. */
+export function expandTildePath(input: string, home = os.homedir()): string {
+  if (typeof input !== "string" || input.length === 0) {
+    throw new UnsafePathError("Workspace path must be a non-empty absolute path");
+  }
+  if (input === "~") return home;
+  if (input.startsWith("~/") || input.startsWith(`~${path.sep}`)) return path.join(home, input.slice(2));
+  if (input.startsWith("~")) throw new UnsafePathError("Only ~ and ~/ paths are supported");
+  return input;
+}
+
+/** Resolve and validate an existing directory supplied as a workspace path. */
+export async function normalizeWorkspacePath(input: string, home = os.homedir()): Promise<string> {
+  const expanded = expandTildePath(input, home);
+  if (!isAbsolute(expanded)) throw new UnsafePathError("Workspace path must be absolute");
+  const candidate = path.resolve(expanded);
+  const resolved = await fs.realpath(candidate);
+  const stat = await fs.stat(resolved);
+  if (!stat.isDirectory()) throw new UnsafePathError("Workspace path must be an existing directory");
+  return resolved;
 }
 
 function isAbsolute(input: string): boolean {

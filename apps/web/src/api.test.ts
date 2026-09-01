@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { acpEventsUrl, createAcpSession, getAcpProviders, getGitStatus, parseAcpEvent, promptAcpSession } from "./api";
+import { acpEventsUrl, createAcpSession, getAcpProviders, getGitStatus, getWorkspaceDirectoryChildren, parseAcpEvent, promptAcpSession } from "./api";
 
 describe("ACP web API", () => {
   beforeEach(() => {
@@ -58,5 +58,29 @@ describe("ACP web API", () => {
     const previous = await getGitStatus("token-git");
     await expect(getGitStatus("token-git")).rejects.toThrow("503");
     expect(previous.files).toEqual([{ path: "a.ts", status: "modified" }]);
+  });
+
+  it("requests one directory level with an optional final-segment query", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string>)["x-session-token"]).toBe("token-path");
+      return new Response(JSON.stringify({ currentPath: "/home/me", parentPath: "/home", homePath: "/home/me", children: [{ name: "projects", path: "/home/me/projects" }] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getWorkspaceDirectoryChildren("~", "token-path", "pro j")).resolves.toMatchObject({ children: [{ name: "projects" }] });
+    expect(new URL(`http://ainide.test${String(fetchMock.mock.calls[0]?.[0])}`).searchParams.get("path")).toBe("~");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("query=pro+j");
+  });
+
+  it("rejects malformed directory responses with a useful error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ currentPath: "/tmp", children: [] }), { status: 200 })));
+
+    await expect(getWorkspaceDirectoryChildren("/tmp", "token-path")).rejects.toThrow("parentPath");
+  });
+
+  it("reports invalid JSON as a malformed directory response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("not json", { status: 200 })));
+
+    await expect(getWorkspaceDirectoryChildren("/tmp", "token-path")).rejects.toThrow("Malformed directory response");
   });
 });

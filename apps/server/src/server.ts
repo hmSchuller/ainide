@@ -9,6 +9,7 @@ import type { WebSocket } from "ws";
 import { ReviewManager } from "./review.js";
 import { TerminalError, TerminalManager } from "./terminals.js";
 import { ProjectRegistry } from "./projects.js";
+import { listDirectoryChildren } from "./directory-picker.js";
 import { loadConfig } from "./config.js";
 import { loadSessionSnapshot, saveSessionSnapshot } from "./sessions.js";
 import { WorkspaceManager } from "./workspace.js";
@@ -254,6 +255,16 @@ export async function createServer(): Promise<AinideServer> {
   app.addHook("onRequest", tokenGuard(token));
 
   app.get("/api/workspace", async () => projects.currentWorkspace ?? null);
+  app.get("/api/workspace/children", async (request, reply) => {
+    const values = request.query as { path?: unknown; query?: unknown };
+    if (typeof values.path !== "string" || !values.path.trim()) return reply.code(400).send({ error: "path is required" });
+    if (values.query !== undefined && typeof values.query !== "string") return reply.code(400).send({ error: "query must be a string" });
+    try {
+      return await listDirectoryChildren(values.path, values.query ?? "");
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Unable to list directory" });
+    }
+  });
   const openProject = async (rawPath: string, leavingSnapshot: unknown) => {
     applyLeavingSnapshot(leavingSnapshot);
     const resolved = await new WorkspaceManager().validate(rawPath);

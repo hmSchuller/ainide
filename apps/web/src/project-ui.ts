@@ -1,4 +1,4 @@
-import type { AcpActivity, AcpSession, GitStatus, ProjectRef, ProjectSessionSnapshot, RecentChange, TerminalSession, Workspace, WorkspaceEvent } from "@ainide/shared";
+import type { AcpActivity, AcpSession, GitStatus, ProjectSessionSnapshot, RecentChange, TerminalSession, Workspace, WorkspaceEvent } from "@ainide/shared";
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, ReviewState } from "./types";
 import type { ReferenceItem } from "./references";
 
@@ -173,9 +173,4 @@ export function snapshotFromBag(workspace: Workspace, bag: ProjectUiBag): Projec
     agentSessions: bag.terminals.filter((terminal) => terminal.kind === "agent").map((terminal) => ({ title: terminal.title })),
     ...(acpSessions.length ? { acpSessions } : {}),
   };
-}
-
-export function recentProjectSeed(recentProjects: ProjectRef[], lastWorkspace: string | null): string {
-  if (recentProjects.length > 0) return recentProjects[0]?.rootPath ?? "";
-  return lastWorkspace ?? "";
 }
