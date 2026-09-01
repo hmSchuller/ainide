@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { acpEventsUrl, createAcpSession, getAcpProviders, getGitStatus, getProjectAgentSettings, getWorkspaceDirectoryChildren, parseAcpEvent, promptAcpSession, updateProjectAgentSettings } from "./api";
+import { acpEventsUrl, createAcpSession, getAcpProviders, getGitFileComparison, getGitStatus, getProjectAgentSettings, getWorkspaceDirectoryChildren, parseAcpEvent, promptAcpSession, updateProjectAgentSettings } from "./api";
 
 describe("ACP web API", () => {
   beforeEach(() => {
@@ -70,6 +70,17 @@ describe("ACP web API", () => {
 
     await expect(getGitStatus("token-git")).resolves.toMatchObject({ isRepository: true, dirty: false });
     expect(fetchMock).toHaveBeenCalledWith("/api/git/status", expect.objectContaining({ headers: expect.objectContaining({ "x-session-token": "token-git" }) }));
+  });
+
+  it("requests a workspace-relative Git baseline through the authenticated route", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string>)["x-session-token"]).toBe("token-git");
+      return new Response(JSON.stringify({ path: "src/a.ts", status: "modified", baseline: "head", head: "abc", isRepository: true, content: "before\n" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getGitFileComparison("src/a.ts", "token-git")).resolves.toMatchObject({ path: "src/a.ts", baseline: "head", content: "before\n" });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/git/compare?path=src%2Fa.ts");
   });
 
   it("retains the last successful value when a later status request fails", async () => {

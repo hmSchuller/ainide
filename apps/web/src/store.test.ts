@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitFileComparison } from "@ainide/shared";
 
 vi.hoisted(() => {
   const storage = new Map<string, string>();
@@ -12,7 +13,7 @@ vi.hoisted(() => {
 });
 
 import { TERMINAL_COLLAPSED_KEY } from "./layout-prefs";
-import { findPaneForPath, useAppStore } from "./store";
+import { findPaneForPath, gitComparisonKey, useAppStore } from "./store";
 
 describe("store tab rename", () => {
   beforeEach(() => {
@@ -199,5 +200,67 @@ describe("combined agent state", () => {
     useAppStore.setState({ activeProjectId: "/project-a", acpSessions: [session] });
      useAppStore.getState().addAcpSession({ ...session, title: "Fake provider", availableCommands: [] });
     expect(useAppStore.getState().acpSessions).toEqual([session]);
+  });
+});
+
+function comparison(overrides: Partial<GitFileComparison> = {}): GitFileComparison {
+  return {
+    path: "src/a.ts",
+    status: "modified",
+    baseline: "head",
+    head: "head-a",
+    branch: "main",
+    isRepository: true,
+    content: "baseline",
+    ...overrides,
+  };
+}
+
+describe("transient Git comparison state", () => {
+  beforeEach(() => {
+    useAppStore.setState({ token: "token-a", activeProjectId: "project-a", gitComparisons: {} });
+  });
+
+  it("stores ready and unavailable results under the project, path, and HEAD key", () => {
+    const readyRequest = useAppStore.getState().beginGitComparison({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a" });
+    expect(readyRequest).toBeDefined();
+    useAppStore.getState().setGitComparisonResult({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a", requestId: readyRequest!, comparison: comparison() });
+
+    const unavailableRequest = useAppStore.getState().beginGitComparison({ projectId: "project-a", path: "image.png", head: "head-a", token: "token-a" });
+    useAppStore.getState().setGitComparisonResult({ projectId: "project-a", path: "image.png", head: "head-a", token: "token-a", requestId: unavailableRequest!, comparison: comparison({ path: "image.png", status: "modified", baseline: "unavailable", unavailableReason: "binary", content: undefined }) });
+    const errorRequest = useAppStore.getState().beginGitComparison({ projectId: "project-a", path: "notes.md", head: "head-a", token: "token-a" });
+    useAppStore.getState().setGitComparisonError({ projectId: "project-a", path: "notes.md", head: "head-a", token: "token-a", requestId: errorRequest!, message: "Comparison failed" });
+
+    const state = useAppStore.getState().gitComparisons;
+    expect(state[gitComparisonKey("project-a", "src/a.ts", "head-a")]).toMatchObject({ status: "ready", comparable: true });
+    expect(state[gitComparisonKey("project-a", "image.png", "head-a")]).toMatchObject({ status: "unavailable", comparable: false, reason: "binary" });
+    expect(state[gitComparisonKey("project-a", "notes.md", "head-a")]).toMatchObject({ status: "error", message: "Comparison failed" });
+  });
+
+  it("clears state on project switch and ignores a response from the previous project", () => {
+    const requestId = useAppStore.getState().beginGitComparison({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a" });
+    useAppStore.getState().setProjectSession({ activeProjectId: "project-b", openProjects: [], knownProjects: [] });
+    useAppStore.getState().setGitComparisonResult({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a", requestId: requestId!, comparison: comparison() });
+
+    expect(useAppStore.getState().gitComparisons).toEqual({});
+  });
+
+  it("invalidates old HEAD entries and rejects their late response", () => {
+    const requestId = useAppStore.getState().beginGitComparison({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a" });
+    useAppStore.getState().invalidateGitComparisons("project-a", "head-b");
+    useAppStore.getState().setGitComparisonResult({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a", requestId: requestId!, comparison: comparison() });
+
+    expect(useAppStore.getState().gitComparisons).toEqual({});
+  });
+
+  it("rejects obsolete request and token results", () => {
+    const first = useAppStore.getState().beginGitComparison({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a" });
+    const second = useAppStore.getState().beginGitComparison({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a" });
+    useAppStore.getState().setGitComparisonResult({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a", requestId: first!, comparison: comparison({ content: "obsolete" }) });
+    expect(useAppStore.getState().gitComparisons[gitComparisonKey("project-a", "src/a.ts", "head-a")]).toMatchObject({ status: "loading", requestId: second });
+
+    useAppStore.getState().setToken("token-b");
+    useAppStore.getState().setGitComparisonError({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a", requestId: second!, message: "obsolete" });
+    expect(useAppStore.getState().gitComparisons).toEqual({});
   });
 });

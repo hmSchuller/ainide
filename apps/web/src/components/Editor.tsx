@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import Editor, { type OnMount } from "@monaco-editor/react";
-import type { EditorTab, EditorPaneId, EditorPaneState } from "../types";
-import { isDirty, useAppStore } from "../store";
+import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
+import type { EditorTab, EditorPaneId, EditorPaneState, GitComparisonState } from "../types";
+import { gitComparisonKey, isDirty, useAppStore } from "../store";
 import type { CodeSelection } from "../references";
 import { configureMonacoLanguageSurface } from "../monaco-language-surface";
 import { language } from "../file-language";
+import { diffLines } from "../line-diff";
 
 interface EditorProps {
   onSave: (tab: EditorTab) => void;
@@ -20,6 +21,59 @@ interface EditorProps {
 interface DraggedTab {
   paneId: EditorPaneId;
   path: string;
+}
+
+function comparisonMessage(status: GitComparisonState | undefined): string | undefined {
+  if (!status) return undefined;
+  if (status.status === "loading") return "Loading Git baseline...";
+  if (status.status === "error") return "Git comparison unavailable";
+  if (status.status === "unavailable") {
+    switch (status.reason) {
+      case "non-repository": return "Git baseline unavailable · not a repository";
+      case "no-head": return "Git baseline unavailable · no committed HEAD";
+      case "binary": return "Text comparison unavailable · binary file";
+      case "conflict": return "Text comparison unavailable · unresolved conflict";
+      default: return "Git baseline unavailable";
+    }
+  }
+  if (status.comparison.status === "clean") return "Git clean";
+  if (status.comparison.status === "untracked") return "Untracked · empty baseline";
+  if (status.comparison.status === "deleted") return "Deleted · HEAD baseline";
+  if (status.comparison.status === "renamed" && status.comparison.previousPath) return `Renamed from ${status.comparison.previousPath}`;
+  return `Git ${status.comparison.status}`;
+}
+
+interface GitDiffViewProps {
+  paneId: EditorPaneId;
+  tab: EditorTab;
+  comparison: Extract<GitComparisonState, { status: "ready" }>;
+  onClose: () => void;
+}
+
+function GitDiffView({ paneId, tab, comparison, onClose }: GitDiffViewProps) {
+  const baseline = comparison.comparison.content ?? "";
+  const current = comparison.comparison.status === "deleted" ? "" : tab.content;
+  const clean = baseline === current;
+  const currentLabel = comparison.comparison.status === "deleted" ? "CURRENT BUFFER · DELETED" : `CURRENT BUFFER${isDirty(tab) ? " · UNSAVED" : ""}`;
+
+  return <div className="git-diff-view">
+    <div className="git-diff-header">
+      <div className="git-diff-heading"><span className="eyebrow">FILE COMPARISON</span><strong>{tab.path}</strong></div>
+      <button className="split-control" onClick={onClose}>Close Git diff</button>
+    </div>
+    {clean ? <div className="git-diff-clean"><span className="state-icon">✓</span><h2>No file changes</h2><p>The current buffer matches the committed HEAD baseline.</p></div> : <>
+      <div className="git-diff-labels"><span><b>HEAD</b>{comparison.comparison.previousPath && <small>{comparison.comparison.previousPath}</small>}</span><span><b>{currentLabel}</b><small>{tab.path}</small></span></div>
+      <div className="git-diff-editor"><DiffEditor
+        original={baseline}
+        modified={current}
+        language={tab.language}
+        theme="vs-dark"
+        originalModelPath={`ainide-git-head://${paneId}/${tab.path}`}
+        modifiedModelPath={`ainide-git-buffer://${paneId}/${tab.path}`}
+        options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, readOnly: true, originalEditable: false, renderSideBySide: true, scrollBeyondLastLine: false }}
+      /></div>
+    </>}
+  </div>;
 }
 
 function readDraggedTab(event: DragEvent<HTMLElement>): DraggedTab | undefined {
@@ -65,11 +119,17 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
   const closeSecondary = useAppStore((state) => state.closeSecondary);
   const pendingLocation = useAppStore((state) => state.pendingLocation);
   const setPendingLocation = useAppStore((state) => state.setPendingLocation);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const gitHead = useAppStore((state) => state.git?.head);
+  const gitComparison = useAppStore((state) => activeProjectId && active ? state.gitComparisons[gitComparisonKey(activeProjectId, active.path, gitHead)] : undefined);
   const [compare, setCompare] = useState(false);
+  const [gitDiffOpen, setGitDiffOpen] = useState(false);
   const [draggingPath, setDraggingPath] = useState<string>();
   const [dropIndex, setDropIndex] = useState<number>();
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const editorPathRef = useRef<string>();
+  const decorationIdsRef = useRef<string[]>([]);
+  const previousPathRef = useRef<string>();
 
   const focusPane = () => setFocusedPane(paneId);
 
@@ -136,6 +196,35 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
   };
 
   useEffect(() => {
+    if (previousPathRef.current !== undefined && previousPathRef.current !== active?.path) setGitDiffOpen(false);
+    previousPathRef.current = active?.path;
+  }, [active?.path]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const clearDecorations = () => {
+      if (!decorationIdsRef.current.length) return;
+      decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, []);
+    };
+    const ready = gitComparison?.status === "ready" ? gitComparison : undefined;
+    if (!active || active.binary || active.error || ready?.comparison.status === "deleted") {
+      clearDecorations();
+      return clearDecorations;
+    }
+    const ranges = ready ? diffLines(ready.comparison.content ?? "", active.content) : [];
+    decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, ranges.map((range) => ({
+      range: { startLineNumber: range.startLine, startColumn: 1, endLineNumber: range.endLine, endColumn: 1 },
+      options: {
+        isWholeLine: range.kind !== "deletion",
+        linesDecorationsClassName: `ainide-git-${range.kind}`,
+        glyphMarginClassName: `ainide-git-glyph-${range.kind}`,
+      },
+    })));
+    return clearDecorations;
+  }, [active, active?.content, active?.error, active?.binary, gitComparison]);
+
+  useEffect(() => {
     const location = pendingLocation;
     if (!location || location.paneId !== paneId || location.path !== pane.activePath || editorPathRef.current !== pane.activePath || !editorRef.current || !active || active.binary || active.error) return;
     editorRef.current.revealPositionInCenter({ lineNumber: location.line, column: location.column ?? 1 });
@@ -194,6 +283,10 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
     return { startLineNumber: value.startLineNumber, endLineNumber: value.endLineNumber };
   };
 
+  const readyComparison = gitComparison?.status === "ready" ? gitComparison : undefined;
+  const canOpenGitDiff = Boolean(readyComparison && (!active?.error || readyComparison.comparison.status === "deleted"));
+  const gitStatusText = comparisonMessage(gitComparison);
+
   return (
     <section
       className={`editor-pane ${focusedPaneId === paneId ? "focused" : ""}`}
@@ -235,11 +328,11 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
               </span>
             </div>
           )}
-          {active.error ? <div className="file-state"><span className="state-icon">!</span><h2>Could not open file</h2><p>{active.error}</p></div> : active.binary ? <div className="file-state"><span className="state-icon">◈</span><h2>Binary file</h2><p>ainide does not edit binary files.</p></div> : (
+          {gitDiffOpen && canOpenGitDiff && readyComparison ? <GitDiffView paneId={paneId} tab={active} comparison={readyComparison} onClose={() => setGitDiffOpen(false)} /> : active.error ? <div className="file-state"><span className="state-icon">!</span><h2>Could not open file</h2><p>{active.error}</p>{canOpenGitDiff && <button className="primary-button" onClick={() => setGitDiffOpen(true)}>View Git diff</button>}</div> : active.binary ? <div className="file-state"><span className="state-icon">◈</span><h2>Binary file</h2><p>ainide does not edit binary files.</p></div> : (
             <>
-               <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions"><button onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button></span></div>
+              <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions">{gitStatusText && <span className={`git-comparison-status ${gitComparison?.status === "unavailable" ? "unavailable" : ""}`}>{gitStatusText}</span>}{canOpenGitDiff && <button onClick={() => setGitDiffOpen(true)}>Git diff</button>}<button onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button></span></div>
               {compare && active.conflict?.externalContent !== undefined && <div className="compare-panel"><div><label>YOUR BUFFER</label><pre>{active.content}</pre></div><div><label>ON DISK</label><pre>{active.conflict.externalContent}</pre></div></div>}
-               <Editor key={active.path} path={active.path} theme="vs-dark" language={active.language} value={active.content} saveViewState beforeMount={configureMonacoLanguageSurface} onMount={mount} onChange={(value) => onContentChange(active.path, value ?? "")} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", padding: { top: 10 }, scrollBeyondLastLine: false, renderWhitespace: "selection", smoothScrolling: true }} />
+              <Editor key={active.path} path={active.path} theme="vs-dark" language={active.language} value={active.content} saveViewState beforeMount={configureMonacoLanguageSurface} onMount={mount} onChange={(value) => onContentChange(active.path, value ?? "")} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", glyphMargin: true, padding: { top: 10 }, scrollBeyondLastLine: false, renderWhitespace: "selection", smoothScrolling: true }} />
             </>
           )}
         </div>

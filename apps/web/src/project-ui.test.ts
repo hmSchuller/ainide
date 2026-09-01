@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EditorTab } from "./types";
 import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, snapshotFromBag } from "./project-ui";
+import { diffLines } from "./line-diff";
 
 function tab(overrides: Partial<EditorTab> = {}): EditorTab {
   return { path: "src/a.ts", name: "a.ts", content: "clean", savedContent: "clean", language: "typescript", ...overrides };
@@ -16,6 +17,8 @@ describe("project UI bags", () => {
     expect(gitChangeType(previous, current, "src/c.ts")).toBe("deleted");
     expect(gitChangeType(previous, { ...previous, files: [...previous.files, { path: "new.ts", status: "untracked" as const }] }, "new.ts")).toBe("created");
     expect(gitChangeType(previous, { ...previous, files: [] }, "src/b.ts")).toBe("changed");
+    expect(gitStatusEqual({ ...previous, head: "one" }, { ...previous, head: "two" })).toBe(false);
+    expect(gitStatusPaths(undefined, { ...previous, files: [{ path: "new.ts", status: "renamed", previousPath: "old.ts" }] })).toEqual(["new.ts", "old.ts"]);
   });
 
   it("keeps dirty buffer contents across switch-and-back", () => {
@@ -50,6 +53,20 @@ describe("project UI bags", () => {
     expect(next[0]?.savedContent).toBe("hidden-agent-change");
     expect(next[1]?.content).toBe("UNSAVED");
     expect(next[1]?.conflict?.externalContent).toBe("disk");
+  });
+
+  it("derives markers from the visible buffer while preserving disk conflicts", () => {
+    const baseline = "one\ntwo\n";
+    const dirty = tab({ content: "one\nTWO\n", savedContent: baseline });
+    expect(diffLines(baseline, dirty.content)).toEqual([{ kind: "modification", startLine: 2, endLine: 2 }]);
+
+    const reloaded = applyDiskToTabs([tab({ content: baseline, savedContent: baseline })], { "src/a.ts": { content: "one\nthree\n" } })[0]!;
+    expect(diffLines(baseline, reloaded.content)).toEqual([{ kind: "modification", startLine: 2, endLine: 2 }]);
+
+    const conflict = applyDiskToTabs([dirty], { "src/a.ts": { content: "one\nexternal\n" } })[0]!;
+    expect(conflict.content).toBe(dirty.content);
+    expect(conflict.conflict?.externalContent).toBe("one\nexternal\n");
+    expect(diffLines(baseline, conflict.content)).toEqual([{ kind: "modification", startLine: 2, endLine: 2 }]);
   });
 
   it("preserves binary and unreadable file states during disk reconciliation", () => {

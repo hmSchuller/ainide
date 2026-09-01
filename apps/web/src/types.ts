@@ -1,4 +1,4 @@
-import type { AppMode, FileEntry, GitStatus, ReviewScope, SessionBootstrap, TerminalSession } from "@ainide/shared";
+import type { AppMode, FileEntry, GitBaselineUnavailableReason, GitFileComparison, GitStatus, ReviewScope, SessionBootstrap, TerminalSession } from "@ainide/shared";
 import type { ReferenceItem } from "./references";
 
 export type { AppMode };
@@ -37,6 +37,29 @@ export interface ReviewState {
   available?: boolean;
   message?: string;
 }
+
+export interface GitComparisonRequestInput {
+  projectId: string;
+  path: string;
+  head?: string;
+  token: string;
+}
+
+export interface GitComparisonRequest extends GitComparisonRequestInput {
+  requestId: number;
+}
+
+interface GitComparisonStateBase {
+  projectId: string;
+  path: string;
+  head?: string;
+}
+
+export type GitComparisonState =
+  | (GitComparisonStateBase & { status: "loading"; requestId: number })
+  | (GitComparisonStateBase & { status: "ready"; comparable: true; comparison: GitFileComparison })
+  | (GitComparisonStateBase & { status: "unavailable"; comparable: false; reason: GitBaselineUnavailableReason; comparison: GitFileComparison })
+  | (GitComparisonStateBase & { status: "error"; message: string });
 
 export interface Notice {
   id: number;

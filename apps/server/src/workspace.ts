@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { FileEntry, GitStatus, RecentChange, Workspace, WorkspaceEvent } from "@ainide/shared";
-import { getGitStatus } from "./git.js";
+import type { FileEntry, GitFileComparison, GitStatus, RecentChange, Workspace, WorkspaceEvent } from "@ainide/shared";
+import { getGitFileComparison, getGitStatus } from "./git.js";
 import { normalizeWorkspacePath, resolveSafePath } from "./path-resolver.js";
 
 const ignoredNames = new Set([".git", "node_modules", "dist", "build", ".next"]);
@@ -155,6 +155,14 @@ export class WorkspaceManager {
     } catch {
       return { type: "binary", path: relativePath };
     }
+  }
+
+  async compare(relativePath: string): Promise<GitFileComparison> {
+    const root = this.requireRoot();
+    // Validate the workspace-relative path (rejecting traversal, absolute paths, and
+    // symlink escapes) before any Git or filesystem comparison operation.
+    await resolveSafePath(root.rootPath, relativePath);
+    return getGitFileComparison(root.rootPath, relativePath.replaceAll("\\", "/"));
   }
 
   async write(relativePath: string, content: string): Promise<void> {
