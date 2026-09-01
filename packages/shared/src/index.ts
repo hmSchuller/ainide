@@ -34,10 +34,12 @@ export interface WorkspaceDirectoryChildrenResponse {
 export interface GitFileStatus {
   path: string;
   status: GitFileStatusKind;
+  previousPath?: string;
 }
 
 export interface GitStatus {
   branch?: string;
+  head?: string;
   dirty: boolean;
   isRepository: boolean;
   files: GitFileStatus[];
@@ -48,7 +50,42 @@ export interface GitStatus {
   };
 }
 
-export type TerminalKind = "agent" | "shell" | "lazygit" | "custom";
+export type GitBaselineKind = "head" | "empty" | "unavailable";
+
+export type GitBaselineUnavailableReason =
+  | "non-repository"
+  | "no-head"
+  | "binary"
+  | "conflict"
+  | "unknown";
+
+export interface GitFileComparison {
+  path: string;
+  previousPath?: string;
+  status: GitFileStatusKind | "clean";
+  baseline: GitBaselineKind;
+  unavailableReason?: GitBaselineUnavailableReason;
+  head?: string;
+  branch?: string;
+  isRepository: boolean;
+  content?: string;
+}
+
+export type TerminalKind = "agent" | "shell" | "lazygit" | "custom" | "build";
+
+export interface BuildCommand {
+  label: string;
+  command: string;
+}
+
+export interface ProjectBuildCommands {
+  commands: BuildCommand[];
+}
+
+export interface ProjectBuildCommandsUpdate {
+  rootPath: string;
+  commands: BuildCommand[];
+}
 
 export interface TerminalSession {
   id: string;

@@ -1,6 +1,11 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { BuildCommand } from "@ainide/shared";
+
+export const MAX_BUILD_COMMANDS = 20;
+export const MAX_BUILD_LABEL_LENGTH = 80;
+export const MAX_BUILD_COMMAND_LENGTH = 500;
 
 export interface AcpAgentConfig {
   id: string;
@@ -12,6 +17,7 @@ export interface AcpAgentConfig {
 
 export interface ProjectAgentConfig {
   disabledAgents: string[];
+  buildCommands: BuildCommand[];
 }
 
 export interface AinideConfig {
@@ -83,7 +89,13 @@ function serializeConfig(config: AinideConfig): Record<string, unknown> {
     // Object.fromEntries uses define-property semantics, so reserved keys such
     // as "__proto__" become own properties and survive JSON.stringify.
     serialized.projects = Object.fromEntries(
-      [...config.projects.entries()].map(([rootPath, entry]) => [rootPath, { disabledAgents: [...entry.disabledAgents] }]),
+      [...config.projects.entries()].map(([rootPath, entry]) => [
+        rootPath,
+        {
+          disabledAgents: [...entry.disabledAgents],
+          ...(entry.buildCommands.length ? { buildCommands: entry.buildCommands } : {}),
+        },
+      ]),
     );
   }
   return serialized;
@@ -114,15 +126,26 @@ export function parseProjects(value: unknown): Map<string, ProjectAgentConfig> |
   for (const [rootPath, entry] of Object.entries(value as Record<string, unknown>)) {
     if (!rootPath || !entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const record = entry as Record<string, unknown>;
-    if (record.disabledAgents === undefined) {
-      projects.set(rootPath, { disabledAgents: [] });
-      continue;
-    }
-    const disabled = parseStringArray(record.disabledAgents);
+    const disabled = record.disabledAgents === undefined ? [] : parseStringArray(record.disabledAgents);
     if (!disabled) continue;
-    projects.set(rootPath, { disabledAgents: disabled });
+    const buildCommands = record.buildCommands === undefined ? [] : parseBuildCommands(record.buildCommands) ?? [];
+    projects.set(rootPath, { disabledAgents: disabled, buildCommands });
   }
   return projects.size ? projects : undefined;
+}
+
+export function parseBuildCommands(value: unknown): BuildCommand[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_BUILD_COMMANDS) return undefined;
+  const commands: BuildCommand[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+    const record = item as Record<string, unknown>;
+    const label = cleanConfigText(record.label, MAX_BUILD_LABEL_LENGTH);
+    const command = cleanConfigText(record.command, MAX_BUILD_COMMAND_LENGTH);
+    if (!label || !command) return undefined;
+    commands.push({ label, command });
+  }
+  return commands;
 }
 
 function cleanConfigText(value: unknown, maxLength: number): string | undefined {

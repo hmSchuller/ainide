@@ -41,13 +41,17 @@ export class TerminalManager {
   }
 
   create(input: { kind?: unknown; title?: unknown; command?: unknown; cols?: unknown; rows?: unknown }): TerminalSession {
-    const kind = input.kind === "agent" || input.kind === "shell" || input.kind === "lazygit" || input.kind === "custom" ? input.kind : "shell";
+    const kind = input.kind === "agent" || input.kind === "shell" || input.kind === "lazygit" || input.kind === "custom" || input.kind === "build" ? input.kind : "shell";
     const cwd = this.getCwd();
     if (!cwd) throw new TerminalError(409, "Open a workspace before creating a terminal");
     if (kind === "lazygit" && !isAvailable("lazygit")) throw new TerminalError(400, "lazygit is not installed or is not available on PATH");
+    if (kind === "build") {
+      if (typeof input.command !== "string" || !input.command.trim()) throw new TerminalError(400, "A non-empty command is required for a build terminal");
+      if (this.list(cwd).some((session) => session.kind === "build" && session.alive)) throw new TerminalError(409, "A build is already running for this project");
+    }
     const shell = this.config.defaultShell?.trim() || process.env.SHELL || "/bin/sh";
     const configuredAgent = this.config.agentCommand?.trim();
-    const command = kind === "agent" ? configuredAgent || shell : kind === "lazygit" ? "lazygit" : shell;
+    const command = kind === "agent" ? configuredAgent || shell : kind === "lazygit" ? "lazygit" : kind === "build" ? input.command as string : shell;
     const cols = validDimension(input.cols, 120);
     const rows = validDimension(input.rows, 40);
     const id = randomUUID();
@@ -91,6 +95,12 @@ export class TerminalManager {
   remove(id: string, projectId = this.getCwd()): boolean {
     const live = this.sessions.get(id);
     if (!live || !projectId || live.session.projectId !== projectId) return false;
+    if (live.session.kind === "build" && live.session.alive) {
+      // Stopping a build terminates the process but keeps the exited session:
+      // attached views observe the exit and the tab remains in the panel.
+      live.process.kill();
+      return true;
+    }
     return this.removeLive(id, live);
   }
 

@@ -1,6 +1,8 @@
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewScope } from "@ainide/shared";
 import { createServer, type AinideServer } from "./server.js";
@@ -12,6 +14,12 @@ async function tempProject(prefix: string): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), prefix));
   await writeFile(path.join(root, "readme.txt"), `${prefix}\n`);
   return root;
+}
+
+const execFileAsync = promisify(execFile);
+
+async function gitIn(root: string, args: string[]): Promise<void> {
+  await execFileAsync("git", ["-C", root, ...args], { encoding: "utf8" });
 }
 
 function fakeAcpProviderScript(): string {
@@ -440,6 +448,103 @@ describe("project HTTP API", () => {
     }, undefined, configPath);
   });
 
+  it("reads and replaces a project's build commands over the builds API", async () => {
+    const root = await tempProject("ainide-api-builds-");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-api-builds-snap-"));
+    const configPath = path.join(dir, "config.json");
+
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      expect((await server.app.inject({ method: "GET", url: "/api/project/builds", headers })).statusCode).toBe(409);
+
+      const opened = await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      expect(opened.statusCode).toBe(200);
+      const rootPath = opened.json().activeProjectId as string;
+
+      const empty = await server.app.inject({ method: "GET", url: "/api/project/builds", headers });
+      expect(empty.statusCode).toBe(200);
+      expect(empty.json()).toEqual({ commands: [] });
+
+      const commands = [{ label: "Build", command: "npm run build" }, { label: "Test", command: "npm test" }];
+      const updated = await server.app.inject({ method: "PATCH", url: "/api/project/builds", headers, payload: { rootPath, commands } });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json()).toEqual({ ok: true, rootPath, commands });
+
+      const reread = await server.app.inject({ method: "GET", url: "/api/project/builds", headers });
+      expect(reread.json().commands).toEqual(commands);
+
+      const explicit = await server.app.inject({ method: "GET", url: `/api/project/builds?projectId=${encodeURIComponent(rootPath)}`, headers });
+      expect(explicit.json().commands).toEqual(commands);
+
+      const onDisk = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(configPath, "utf8"))) as { projects?: Record<string, { buildCommands: unknown }> };
+      expect(onDisk.projects?.[rootPath]?.buildCommands).toEqual(commands);
+    }, undefined, configPath);
+  });
+
+  it("rejects invalid build command updates and leaves the stored list unchanged", async () => {
+    const root = await tempProject("ainide-api-builds-reject-");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-api-builds-snap-"));
+    const configPath = path.join(dir, "config.json");
+    const saved = [{ label: "Build", command: "npm run build" }];
+
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      const rootPath = server.projects.activeId as string;
+      await server.app.inject({ method: "PATCH", url: "/api/project/builds", headers, payload: { rootPath, commands: saved } });
+
+      const attempt = async (commands: unknown) => (await server.app.inject({ method: "PATCH", url: "/api/project/builds", headers, payload: { rootPath, commands } })).statusCode;
+      expect(await attempt([{ label: "", command: "npm run build" }])).toBe(400);
+      expect(await attempt([{ label: " x ", command: "  " }])).toBe(400);
+      expect(await attempt([{ label: "Build" }])).toBe(400);
+      expect(await attempt([{ label: "x".repeat(81), command: "y" }])).toBe(400);
+      expect(await attempt([{ label: "x", command: "y".repeat(501) }])).toBe(400);
+      expect(await attempt(Array.from({ length: 21 }, (_, index) => ({ label: `L${index}`, command: "c" })))).toBe(400);
+      expect(await attempt("not-an-array")).toBe(400);
+      expect(await attempt([{ label: "ok", command: "c" }, 42])).toBe(400);
+
+      const reread = await server.app.inject({ method: "GET", url: "/api/project/builds", headers });
+      expect(reread.json().commands).toEqual(saved);
+
+      const unknown = await server.app.inject({ method: "PATCH", url: "/api/project/builds", headers, payload: { rootPath: "/not/a/project", commands: [{ label: "x", command: "y" }] } });
+      expect(unknown.statusCode).toBe(404);
+      const unknownRead = await server.app.inject({ method: "GET", url: `/api/project/builds?projectId=${encodeURIComponent("/not/a/project")}`, headers });
+      expect(unknownRead.statusCode).toBe(404);
+
+      const onDisk = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(configPath, "utf8"))) as { projects?: Record<string, unknown> };
+      expect(onDisk.projects?.["/not/a/project"]).toBeUndefined();
+    }, undefined, configPath);
+  });
+
+  it("sets build commands for a root path with spaces, non-ASCII, and __proto__", async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), "ainide-api-builds-special-"));
+    const root = path.join(base, "my proj/ünïcode");
+    await mkdir(root, { recursive: true });
+    await writeFile(path.join(root, "readme.txt"), "special\n");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-api-builds-snap-"));
+    const configPath = path.join(dir, "config.json");
+
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      const rootPath = server.projects.activeId as string;
+
+      const commands = [{ label: "特", command: "echo 'héllo wörld'" }, { label: "quote \" label", command: "make && echo done" }];
+      const updated = await server.app.inject({ method: "PATCH", url: "/api/project/builds", headers, payload: { rootPath, commands } });
+      expect(updated.statusCode).toBe(200);
+
+      const reread = await server.app.inject({ method: "GET", url: "/api/project/builds", headers });
+      expect(reread.json().commands).toEqual(commands);
+
+      const second = await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      expect(second.json().activeProjectId).toBe(rootPath);
+
+      const onDisk = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(configPath, "utf8"))) as { projects?: Record<string, { buildCommands: unknown }> };
+      expect(onDisk.projects?.[rootPath]?.buildCommands).toEqual(commands);
+      expect(Object.keys(onDisk.projects ?? {})).not.toContain("__proto__");
+    }, undefined, configPath);
+  });
+
   it("writes activeRootPath when switching projects", async () => {
     const first = await tempProject("ainide-api-pers-a-");
     const second = await tempProject("ainide-api-pers-b-");
@@ -469,6 +574,77 @@ describe("project HTTP API", () => {
       expect(denied.statusCode).toBe(400);
       const conflict = await server.app.inject({ method: "POST", url: "/api/file/create", headers, payload: { path: "readme.txt", type: "file" } });
       expect(conflict.statusCode).toBe(400);
+    });
+  });
+
+  it("guards the git comparison route with auth, path safety, and active project", async () => {
+    const root = await tempProject("ainide-api-cmp-");
+    await withServer(async (server) => {
+      const headers = auth(server.token, false);
+      expect((await server.app.inject({ method: "GET", url: "/api/git/compare?path=readme.txt" })).statusCode).toBe(401);
+      expect((await server.app.inject({ method: "GET", url: "/api/git/compare?path=readme.txt", headers })).statusCode).toBe(400);
+      await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth(server.token), payload: { path: root } });
+      expect((await server.app.inject({ method: "GET", url: `/api/git/compare?path=${encodeURIComponent("/etc/passwd")}`, headers })).statusCode).toBe(400);
+      expect((await server.app.inject({ method: "GET", url: "/api/git/compare?path=../../../../etc/passwd", headers })).statusCode).toBe(400);
+      const ok = await server.app.inject({ method: "GET", url: "/api/git/compare?path=readme.txt", headers });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toMatchObject({ path: "readme.txt", isRepository: false, baseline: "unavailable", unavailableReason: "non-repository" });
+    });
+  });
+
+  it("rejects symlink escapes on the git comparison route", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "ainide-api-cmp-link-"));
+    const root = path.join(parent, "root");
+    const outside = path.join(parent, "outside");
+    await mkdir(root);
+    await mkdir(outside);
+    await writeFile(path.join(outside, "secret.txt"), "no\n");
+    await symlink(outside, path.join(root, "link"));
+    await withServer(async (server) => {
+      const headers = auth(server.token, false);
+      await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth(server.token), payload: { path: root } });
+      const denied = await server.app.inject({ method: "GET", url: "/api/git/compare?path=link/secret.txt", headers });
+      expect(denied.statusCode).toBe(400);
+    });
+  });
+
+  it("returns stable comparison shapes for clean, changed, untracked, deleted, renamed, and exceptional files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ainide-api-cmp-shapes-"));
+    await gitIn(root, ["init", "-q"]);
+    await gitIn(root, ["config", "user.email", "t@e.com"]);
+    await gitIn(root, ["config", "user.name", "T"]);
+    await writeFile(path.join(root, "clean.txt"), "clean\n");
+    await writeFile(path.join(root, "changed.txt"), "before\n");
+    await writeFile(path.join(root, "deleted.txt"), "deleted\n");
+    await writeFile(path.join(root, "old.txt"), "moved\n");
+    await writeFile(path.join(root, "blob.bin"), Buffer.from([0, 1, 2, 0]));
+    await gitIn(root, ["add", "-A"]);
+    await gitIn(root, ["commit", "-q", "-m", "initial"]);
+    await writeFile(path.join(root, "changed.txt"), "after\n");
+    await rm(path.join(root, "deleted.txt"));
+    await gitIn(root, ["mv", "old.txt", "renamed.txt"]);
+    await writeFile(path.join(root, "untracked.txt"), "new\n");
+
+    await withServer(async (server) => {
+      const headers = auth(server.token, false);
+      await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth(server.token), payload: { path: root } });
+      const get = (p: string) => server.app.inject({ method: "GET", url: `/api/git/compare?path=${encodeURIComponent(p)}`, headers });
+      const clean = await get("clean.txt");
+      expect(clean.statusCode).toBe(200);
+      expect(clean.json()).toMatchObject({ path: "clean.txt", status: "clean", baseline: "head", isRepository: true });
+      expect(clean.json().content).toBe("clean\n");
+      const changed = await get("changed.txt");
+      expect(changed.json()).toMatchObject({ path: "changed.txt", status: "modified", baseline: "head" });
+      expect(changed.json().content).toBe("before\n");
+      const untracked = await get("untracked.txt");
+      expect(untracked.json()).toMatchObject({ path: "untracked.txt", status: "untracked", baseline: "empty", content: "" });
+      const deleted = await get("deleted.txt");
+      expect(deleted.json()).toMatchObject({ path: "deleted.txt", status: "deleted", baseline: "head", content: "deleted\n" });
+      const renamed = await get("renamed.txt");
+      expect(renamed.json()).toMatchObject({ path: "renamed.txt", status: "renamed", previousPath: "old.txt", baseline: "head", content: "moved\n" });
+      const binary = await get("blob.bin");
+      expect(binary.json()).toMatchObject({ path: "blob.bin", baseline: "unavailable", unavailableReason: "binary" });
+      expect(binary.json().content).toBeUndefined();
     });
   });
 });

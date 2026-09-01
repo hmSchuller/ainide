@@ -7,6 +7,15 @@ import { missingTerminalKinds } from "@ainide/shared";
 import { TerminalManager } from "./terminals.js";
 import type { WebSocket } from "ws";
 
+async function waitForExit(manager: TerminalManager, id: string, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!manager.list().find((session) => session.id === id)?.alive) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`session ${id} did not exit within ${timeoutMs}ms`);
+}
+
 function fakeSocket(): EventEmitter & { readyState: number; messages: string[]; send: (data: string) => void; close: () => void } {
   const socket = new EventEmitter() as EventEmitter & { readyState: number; messages: string[]; send: (data: string) => void; close: () => void };
   socket.readyState = 1;
@@ -129,6 +138,64 @@ describe("TerminalManager", () => {
     const socket = fakeSocket();
     manager.connect(socket as unknown as WebSocket, session.id);
     expect(socket.messages.map((message) => JSON.parse(message))).toContainEqual({ type: "error", message: "Terminal session does not belong to the active project" });
+    manager.close();
+  });
+
+  it("runs a build command through the shell in the project root and reports exit", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "ainide-pty-build-"));
+    const manager = new TerminalManager(() => cwd, { defaultShell: "/bin/sh" });
+    const session = manager.create({ kind: "build", title: "Build it", command: "echo build-ok", cols: 80, rows: 24 });
+
+    expect(session.kind).toBe("build");
+    expect(session.title).toBe("Build it");
+    expect(session.command).toBe("echo build-ok");
+    expect(session.cwd).toBe(cwd);
+    expect(session.projectId).toBe(cwd);
+
+    const socket = fakeSocket();
+    manager.connect(socket as unknown as WebSocket, session.id);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const messages = socket.messages.map((message) => JSON.parse(message));
+    expect(messages).toContainEqual(expect.objectContaining({ type: "output", data: expect.stringContaining("build-ok") }));
+    expect(messages).toContainEqual({ type: "attached", sessionId: session.id });
+    expect(messages).toContainEqual(expect.objectContaining({ type: "exit", exitCode: 0 }));
+    expect(manager.list(cwd)[0]).toMatchObject({ id: session.id, alive: false });
+    manager.close();
+  });
+
+  it("rejects a build session without a command", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "ainide-pty-build-400-"));
+    const manager = new TerminalManager(() => cwd, { defaultShell: "/bin/sh" });
+    expect(() => manager.create({ kind: "build", title: "Broken", cols: 80, rows: 24 })).toThrowError(/non-empty command/i);
+    expect(() => manager.create({ kind: "build", command: "   ", cols: 80, rows: 24 })).toThrowError(/non-empty command/i);
+    expect(manager.list(cwd)).toHaveLength(0);
+    manager.close();
+  });
+
+  it("allows only one live build per project and rejects a second until the first ends", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "ainide-pty-build-one-"));
+    const manager = new TerminalManager(() => cwd, { defaultShell: "/bin/sh" });
+    const first = manager.create({ kind: "build", title: "First", command: "sleep 30", cols: 80, rows: 24 });
+    expect(() => manager.create({ kind: "build", title: "Second", command: "echo nope", cols: 80, rows: 24 })).toThrowError(/already running/i);
+
+    expect(manager.remove(first.id, cwd)).toBe(true);
+    await waitForExit(manager, first.id);
+    expect(manager.list(cwd).find((session) => session.id === first.id)?.alive).toBe(false);
+
+    const second = manager.create({ kind: "build", title: "Second", command: "echo ok", cols: 80, rows: 24 });
+    expect(second.command).toBe("echo ok");
+    manager.close();
+  });
+
+  it("keeps a stopped build session in the list as exited and removes it on a later delete", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "ainide-pty-build-keep-"));
+    const manager = new TerminalManager(() => cwd, { defaultShell: "/bin/sh" });
+    const session = manager.create({ kind: "build", title: "Stop me", command: "sleep 30", cols: 80, rows: 24 });
+    expect(manager.remove(session.id, cwd)).toBe(true);
+    await waitForExit(manager, session.id);
+    expect(manager.list(cwd).map((item) => item.id)).toContain(session.id);
+    expect(manager.remove(session.id, cwd)).toBe(true);
+    expect(manager.list(cwd)).toHaveLength(0);
     manager.close();
   });
 });

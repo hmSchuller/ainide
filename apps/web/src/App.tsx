@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AcpSession, FileEntry, GitStatus, ProjectAgentSettings, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
+import type { AcpSession, BuildCommand, FileEntry, GitStatus, ProjectAgentSettings, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
-import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getGitStatus, getProjectAgentSettings, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, updateProjectAgentSettings, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
+import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getGitFileComparison, getGitStatus, getProjectAgentSettings, getProjectBuildCommands, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, updateProjectAgentSettings, updateProjectBuildCommands, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
 import { EditorSurface, language } from "./components/Editor";
 import { Explorer } from "./components/Explorer";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
@@ -10,6 +10,7 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { AgentWorkbench } from "./components/AgentWorkbench";
 import { AcpProviderPicker } from "./components/AcpProviderPicker";
 import { ProjectAgentSettingsDialog } from "./components/ProjectAgentSettingsDialog";
+import { BuildRunner } from "./components/BuildRunner";
 import { LazyGitSurface } from "./components/LazyGitSurface";
 import { ReferenceDock } from "./components/ReferenceDock";
 import { WorkspacePicker } from "./components/WorkspacePicker";
@@ -17,7 +18,7 @@ import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActi
 import { createAutoSaver } from "./auto-save";
 import { createGitPollingScheduler } from "./git-polling";
 import { createGitRequestCoordinator } from "./git-request";
-import { findPaneForPath, isDirty, useAppStore } from "./store";
+import { findPaneForPath, gitComparisonKey, isDirty, useAppStore } from "./store";
 import type { EditorPaneId, EditorTab } from "./types";
 import type { CodeSelection } from "./references";
 import { captureFileReference, captureSelectionReference, captureTextFileReference, copyReference } from "./references";
@@ -57,6 +58,7 @@ export default function App() {
   const workspace = useAppStore((state) => state.workspace);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const openProjects = useAppStore((state) => state.openProjects);
+  const buildCommands = useAppStore((state) => state.buildCommands);
   const mode = useAppStore((state) => state.mode);
   const git = useAppStore((state) => state.git);
   const reviewScope = useAppStore((state) => state.review.scope);
@@ -148,6 +150,27 @@ export default function App() {
     });
   };
 
+  const loadGitComparison = async (path: string, nextToken: string, projectId: string, head?: string): Promise<void> => {
+    const current = useAppStore.getState();
+    if (!isCurrentProject(projectId, nextToken)) return;
+    const requestedHead = head ?? current.git?.head;
+    const key = gitComparisonKey(projectId, path, requestedHead);
+    if (current.gitComparisons[key] && current.gitComparisons[key]?.status !== "error") return;
+    const requestId = current.beginGitComparison({ projectId, path, head: requestedHead, token: nextToken });
+    if (requestId === undefined) return;
+    try {
+      const comparison = await getGitFileComparison(path, nextToken);
+      useAppStore.getState().setGitComparisonResult({ projectId, path, head: requestedHead, token: nextToken, requestId, comparison });
+    } catch (error) {
+      useAppStore.getState().setGitComparisonError({ projectId, path, head: requestedHead, token: nextToken, requestId, message: error instanceof Error ? error.message : "Git comparison unavailable" });
+    }
+  };
+
+  const loadOpenComparisons = async (nextToken: string, projectId: string, head?: string): Promise<void> => {
+    const tabs = useAppStore.getState().tabs.filter((tab) => !tab.binary);
+    await Promise.all(tabs.map((tab) => loadGitComparison(tab.path, nextToken, projectId, head)));
+  };
+
   const allExplorerPaths = (): string[] => {
     const state = useAppStore.getState();
     return [...new Set(["", ...Object.keys(state.directories), ...Object.entries(state.expanded).flatMap(([path, open]) => open ? [path] : [])])];
@@ -220,14 +243,17 @@ export default function App() {
     if (!gitRequestIsCurrent(requestId, projectId, nextToken)) return;
     const previous = useAppStore.getState().git;
     const changed = !gitStatusEqual(previous, status);
+    if (previous?.head !== status.head) useAppStore.getState().invalidateGitComparisons(projectId, status.head);
     if (changed) setGit(status);
     if (!status.isRepository) {
       if (options.refreshAll) await refreshDirectories(allExplorerPaths(), nextToken, projectId, requestId);
+      if (changed || options.probeOpenFiles) await loadOpenComparisons(nextToken, projectId, status.head);
       return;
     }
     const changedPaths = previous ? gitStatusPaths(previous, status) : [];
     changedPaths.forEach((path) => {
       markRecent(path);
+      useAppStore.getState().invalidateGitComparison(projectId, path);
     });
     if (changed || options.refreshAll) {
       const paths = options.refreshAll
@@ -241,9 +267,10 @@ export default function App() {
         const latest = useAppStore.getState();
         const change = gitChangeType(previous, status, tab.path);
         if (!gitRequestIsCurrent(requestId, projectId, nextToken) || !latest.tabs.some((candidate) => candidate.path === tab.path)) return;
-        await handleExternalChange(tab.path, change, { projectId, nextToken, requestId, refreshExplorer: false });
+          await handleExternalChange(tab.path, change, { projectId, nextToken, requestId, refreshExplorer: false });
       }));
     }
+    if (changed || options.probeOpenFiles) await loadOpenComparisons(nextToken, projectId, status.head);
   };
 
   const requestGitStatus = async (
@@ -270,7 +297,12 @@ export default function App() {
     let status: GitStatus | undefined;
     try {
       status = await getGitStatus(nextToken);
-      if (gitRequestIsCurrent(requestId, projectId, nextToken)) setGit(status);
+      if (gitRequestIsCurrent(requestId, projectId, nextToken)) {
+        const previous = useAppStore.getState().git;
+        if (previous?.head !== status.head) useAppStore.getState().invalidateGitComparisons(projectId, status.head);
+        for (const changedPath of (previous ? gitStatusPaths(previous, status) : [])) useAppStore.getState().invalidateGitComparison(projectId, changedPath);
+        setGit(status);
+      }
     } catch (error) {
       if (gitRequestIsCurrent(requestId, projectId, nextToken)) setNotice(error instanceof Error ? error.message : "Git status unavailable", "error");
     }
@@ -345,7 +377,9 @@ export default function App() {
     await loadExplorerAndGit(nextToken);
     if (hasBag) await reloadTabsFromDisk(nextToken);
     else await reopenFromSnapshot(snapshot, nextToken);
+    await loadOpenComparisons(nextToken, projectId, useAppStore.getState().git?.head);
     await reconcileTerminals(nextToken);
+    await loadBuildCommands(nextToken);
   };
 
   const acceptMutation = async (result: ProjectMutationResponse, nextToken: string, reuseBag: boolean) => {
@@ -469,6 +503,7 @@ export default function App() {
     const paneId = owner ?? requestedPane;
     if (owner) {
       setActivePath(owner, entry.path);
+      if (current.activeProjectId) void loadGitComparison(entry.path, token, current.activeProjectId, current.git?.head);
       return owner;
     }
     const tab: EditorTab = { path: entry.path, name: entry.name || fileName(entry.path), content: "", savedContent: "", language: language(entry.path) };
@@ -480,6 +515,7 @@ export default function App() {
       updateTab(entry.path, { error: error instanceof Error ? error.message : "Unable to open file" });
       setNotice(`Could not open ${fileName(entry.path)}`, "error");
     }
+    if (current.activeProjectId) void loadGitComparison(entry.path, token, current.activeProjectId, useAppStore.getState().git?.head);
     return paneId;
   };
 
@@ -756,6 +792,22 @@ export default function App() {
     }
   };
 
+  const loadBuildCommands = async (nextToken: string) => {
+    try {
+      const commands = await getProjectBuildCommands(nextToken);
+      useAppStore.getState().setBuildCommands(commands);
+    } catch {
+      // The dropdown stays at its previous list while settings are unreachable.
+    }
+  };
+
+  const saveProjectBuilds = async (commands: BuildCommand[]) => {
+    if (!token || !activeProjectId) return;
+    await updateProjectBuildCommands(token, activeProjectId, commands);
+    useAppStore.getState().setBuildCommands(commands);
+    setNotice("Build commands saved", "success");
+  };
+
   const startAcpProvider = async (providerId: string) => {
     if (!token || startingProviderRef.current) return;
     startingProviderRef.current = providerId;
@@ -855,7 +907,7 @@ export default function App() {
           };
            return <button key={entry} className={active ? "active" : ""} role="tab" aria-selected={active} onClick={onClick}>{label}{entry === "agents" && <span className="mode-count">{terminals.filter((terminal) => terminal.kind === "agent" && terminal.alive).length + acpSessions.filter((session) => session.status === "live" || session.status === "waiting").length}</span>}</button>;
         })}</div>
-        <div className="top-actions"><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
+        <div className="top-actions"><BuildRunner onOpenSettings={openProjectSettings} /><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
     <div className="workbench">
         <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer
@@ -904,7 +956,7 @@ export default function App() {
       }} />
      </div>}
     {providerPickerOpen && <AcpProviderPicker providers={agentSettings?.all ?? []} disabled={agentSettings?.disabled ?? []} loading={agentSettingsLoading} error={agentSettingsError} startingProviderId={startingProviderId} onRetry={() => void loadAgentSettings()} onSelect={(providerId) => void startAcpProvider(providerId)} onClose={() => setProviderPickerOpen(false)} />}
-    {projectSettingsOpen && <ProjectAgentSettingsDialog settings={agentSettings} loading={agentSettingsLoading} error={agentSettingsError} onRetry={() => void loadAgentSettings()} onToggle={(providerId, disabled) => void toggleAgentDisabled(providerId, disabled)} onClose={() => setProjectSettingsOpen(false)} />}
+    {projectSettingsOpen && <ProjectAgentSettingsDialog settings={agentSettings} builds={buildCommands} loading={agentSettingsLoading} error={agentSettingsError} onRetry={() => void loadAgentSettings()} onToggle={(providerId, disabled) => void toggleAgentDisabled(providerId, disabled)} onSaveBuilds={saveProjectBuilds} onClose={() => setProjectSettingsOpen(false)} />}
     {(paletteOpen || quickOpen) && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) { setPaletteOpen(false); setQuickOpen(false); } }}>
       <div className="command-modal">
         <div className="command-input"><span>{quickOpen ? "⌕" : "⌘"}</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={quickOpen ? "Search files..." : "Type a command..."} onKeyDown={(event) => { if (event.key === "Escape") { setQuickOpen(false); setPaletteOpen(false); } }} /></div>

@@ -101,9 +101,11 @@ export function eventBelongsToActiveProject(event: WorkspaceEvent, activeProject
 export function normalizeGitStatus(status: GitStatus): GitStatus {
   return {
     branch: status.branch,
+    head: status.head,
     dirty: status.dirty,
     isRepository: status.isRepository,
-    files: [...status.files].sort((left, right) => left.path.localeCompare(right.path) || left.status.localeCompare(right.status)),
+    files: status.files.map((file) => ({ path: file.path, status: file.status, ...(file.previousPath ? { previousPath: file.previousPath } : {}) }))
+      .sort((left, right) => left.path.localeCompare(right.path) || left.status.localeCompare(right.status) || (left.previousPath ?? "").localeCompare(right.previousPath ?? "")),
     summary: { ...status.summary },
   };
 }
@@ -114,7 +116,7 @@ export function gitStatusEqual(left: GitStatus | undefined, right: GitStatus | u
 }
 
 export function gitStatusPaths(previous: GitStatus | undefined, current: GitStatus): string[] {
-  return [...new Set([...(previous?.files ?? []), ...current.files].map((file) => file.path))].sort();
+  return [...new Set([...(previous?.files ?? []), ...current.files].flatMap((file) => [file.path, ...(file.previousPath ? [file.previousPath] : [])]))].sort();
 }
 
 export function explorerPathsForGitChanges(expanded: Record<string, boolean>, changedPaths: string[]): string[] {
@@ -169,7 +171,7 @@ export function snapshotFromBag(workspace: Workspace, bag: ProjectUiBag): Projec
     secondaryOpen: bag.secondaryOpen,
     expandedPaths: Object.entries(bag.expanded).flatMap(([path, open]) => open ? [path] : []),
     mode: bag.mode,
-    terminalKinds: [...new Set(bag.terminals.filter((terminal) => terminal.alive && terminal.kind !== "agent").map((terminal) => terminal.kind))],
+    terminalKinds: [...new Set(bag.terminals.filter((terminal) => terminal.alive && terminal.kind !== "agent" && terminal.kind !== "build").map((terminal) => terminal.kind))],
     agentSessions: bag.terminals.filter((terminal) => terminal.kind === "agent").map((terminal) => ({ title: terminal.title })),
     ...(acpSessions.length ? { acpSessions } : {}),
   };

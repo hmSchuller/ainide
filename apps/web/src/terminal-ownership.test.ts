@@ -16,14 +16,24 @@ function session(overrides: Partial<TerminalSession> = {}): TerminalSession {
 }
 
 describe("terminal ownership", () => {
-  it("limits Edit utilities to shell and custom sessions", () => {
+  it("limits utility tabs to shell, custom, and build sessions", () => {
     const terminals = [
       session({ id: "shell", kind: "shell" }),
       session({ id: "custom", kind: "custom" }),
+      session({ id: "build", kind: "build" }),
       session({ id: "lazygit", kind: "lazygit" }),
       session({ id: "agent", kind: "agent" }),
     ];
-    expect(utilityTerminals(terminals, "/proj-a").map((item) => item.id)).toEqual(["shell", "custom"]);
+    expect(utilityTerminals(terminals, "/proj-a").map((item) => item.id)).toEqual(["shell", "custom", "build"]);
+  });
+
+  it("keeps build utility sessions scoped to their project", () => {
+    const terminals = [
+      session({ id: "build-a", kind: "build", projectId: "/proj-a" }),
+      session({ id: "build-b", kind: "build", projectId: "/proj-b" }),
+      session({ id: "shell", kind: "shell", projectId: "/proj-other" }),
+    ];
+    expect(utilityTerminals(terminals, "/proj-a").map((item) => item.id)).toEqual(["build-a"]);
   });
 
   it("keeps Lazygit sessions for the dedicated mode only", () => {

@@ -33,10 +33,10 @@ describe("layout preferences", () => {
     expect(shouldShowReferenceDock(0)).toBe(false);
   });
 
-  it("shows the utility terminal panel only in Edit mode", () => {
+  it("shows the utility terminal panel in every primary mode", () => {
     expect(terminalPanelVisible("edit")).toBe(true);
-    expect(terminalPanelVisible("review")).toBe(false);
-    expect(terminalPanelVisible("agents")).toBe(false);
-    expect(terminalPanelVisible("lazygit")).toBe(false);
+    expect(terminalPanelVisible("review")).toBe(true);
+    expect(terminalPanelVisible("agents")).toBe(true);
+    expect(terminalPanelVisible("lazygit")).toBe(true);
   });
 });

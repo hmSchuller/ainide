@@ -10,7 +10,7 @@ import { ReviewManager } from "./review.js";
 import { TerminalError, TerminalManager } from "./terminals.js";
 import { ProjectRegistry } from "./projects.js";
 import { listDirectoryChildren } from "./directory-picker.js";
-import { loadConfig, saveConfig } from "./config.js";
+import { loadConfig, parseBuildCommands, saveConfig } from "./config.js";
 import { loadSessionSnapshot, saveSessionSnapshot } from "./sessions.js";
 import { WorkspaceManager } from "./workspace.js";
 import { createAcpResourceHandlers } from "./acp/bridges.js";
@@ -372,6 +372,11 @@ export async function createServer(): Promise<AinideServer> {
   app.get("/api/git/status", async (request, reply) => {
     try { return await projects.requireActive().refreshGit(false); } catch (error) { errorReply(reply, error); }
   });
+  app.get("/api/git/compare", async (request, reply) => {
+    const relativePath = queryPath(request);
+    if (!relativePath) return reply.code(400).send({ error: "path is required" });
+    try { return await projects.requireActive().compare(relativePath); } catch (error) { errorReply(reply, error); }
+  });
   app.get("/api/terminals", async () => projects.activeId ? terminals.list(projects.activeId) : []);
   app.post("/api/terminals", async (request, reply) => {
     try { return terminals.create(body(request)); } catch (error) { errorReply(reply, error); }
@@ -419,13 +424,39 @@ export async function createServer(): Promise<AinideServer> {
     const configuredIds = new Set((config.acpAgents ?? []).map((agent) => agent.id));
     const effective = [...new Set(disabledAgents.filter((id) => configuredIds.has(id)))];
     if (!config.projects) config.projects = new Map();
-    config.projects.set(rootPath, { disabledAgents: effective });
+    config.projects.set(rootPath, { disabledAgents: effective, buildCommands: config.projects.get(rootPath)?.buildCommands ?? [] });
     try {
       await saveConfig(config);
     } catch (error) {
       return reply.code(500).send({ error: error instanceof Error ? error.message : "Unable to save configuration" });
     }
     return { ok: true, rootPath, disabled: effective };
+  });
+  app.get("/api/project/builds", async (request, reply) => {
+    const requested = (request.query as { projectId?: unknown }).projectId;
+    const rootPath = typeof requested === "string" && requested ? requested : projects.activeId;
+    if (!rootPath) return reply.code(409).send({ error: "No project is active" });
+    if (typeof requested === "string" && requested && !projects.isKnownOrOpen(rootPath)) {
+      return reply.code(404).send({ error: "Project is not known or open" });
+    }
+    return { commands: config.projects?.get(rootPath)?.buildCommands ?? [] };
+  });
+  app.patch("/api/project/builds", async (request, reply) => {
+    const values = body(request);
+    const rootPath = values.rootPath;
+    if (typeof rootPath !== "string" || !rootPath) return reply.code(400).send({ error: "rootPath must be a non-empty string" });
+    const commands = parseBuildCommands(values.commands);
+    if (!commands) return reply.code(400).send({ error: "commands must be an array of { label, command } with at most 20 entries, labels 1-80 chars, and commands 1-500 chars" });
+    if (!projects.isKnownOrOpen(rootPath)) return reply.code(404).send({ error: "Project is not known or open" });
+    if (!config.projects) config.projects = new Map();
+    const existing = config.projects.get(rootPath);
+    config.projects.set(rootPath, { disabledAgents: existing?.disabledAgents ?? [], buildCommands: commands });
+    try {
+      await saveConfig(config);
+    } catch (error) {
+      return reply.code(500).send({ error: error instanceof Error ? error.message : "Unable to save configuration" });
+    }
+    return { ok: true, rootPath, commands };
   });
   app.get("/api/acp/sessions", async () => projects.activeId ? acp.list(projects.activeId) : []);
   app.get("/api/acp/sessions/:id", async (request, reply) => {

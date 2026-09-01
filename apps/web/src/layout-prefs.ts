@@ -18,5 +18,5 @@ export function shouldShowReferenceDock(itemCount: number): boolean {
 }
 
 export function terminalPanelVisible(mode: AppMode): boolean {
-  return mode === "edit";
+  return mode === "edit" || mode === "review" || mode === "agents" || mode === "lazygit";
 }

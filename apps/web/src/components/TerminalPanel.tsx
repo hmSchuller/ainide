@@ -165,8 +165,8 @@ export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelP
         <button onClick={() => { const next = !collapsed; if (maximized) setTerminalMaximized(false); setTerminalCollapsed(next); }} title="Collapse terminal">{collapsed ? "⌃" : "⌄"}</button>
       </div>
     </header>
-    {!collapsed && <div className="terminal-body">
+    <div className={`terminal-body ${collapsed ? "collapsed-hidden" : ""}`}>
        {terminals.length === 0 ? <div className="terminal-empty">No utility terminals. Use <button onClick={() => onNewTerminal("shell")}>+ Shell</button> to start one.</div> : terminals.map((terminal) => <div className={`terminal-instance ${terminal.id === selectedTerminalId ? "visible" : "hidden"}`} key={terminal.id}><TerminalView session={terminal} onOpenReference={onOpenReference} /><button className="terminal-close" onClick={() => void close(terminal)} title="Close terminal">×</button></div>)}
-    </div>}
+    </div>
   </section>;
 }

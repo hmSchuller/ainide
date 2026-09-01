@@ -1,6 +1,6 @@
 import type { AppMode, TerminalKind, TerminalSession } from "@ainide/shared";
 
-export const UTILITY_TERMINAL_KINDS: readonly TerminalKind[] = ["shell", "custom"];
+export const UTILITY_TERMINAL_KINDS: readonly TerminalKind[] = ["shell", "custom", "build"];
 
 export function utilityTerminals(terminals: TerminalSession[], projectId?: string): TerminalSession[] {
   return terminals.filter((terminal) => terminal.projectId === projectId && UTILITY_TERMINAL_KINDS.includes(terminal.kind));

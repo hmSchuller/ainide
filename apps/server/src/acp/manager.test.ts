@@ -431,7 +431,7 @@ describe("ACP session manager", () => {
         { id: "opencode", label: "OpenCode", command: "opencode", args: ["acp"] },
         { id: "gemini", label: "Gemini", command: "gemini", args: ["acp"] },
       ],
-      projects: new Map([["/project-a", { disabledAgents: ["gemini"] }]]),
+      projects: new Map([["/project-a", { disabledAgents: ["gemini"], buildCommands: [] }]]),
     };
     const sessions = new AcpSessionManager({ config, onEvent: () => undefined });
 

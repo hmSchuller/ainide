@@ -1,10 +1,11 @@
 import { create } from "zustand";
-import type { AcpActivity, AcpServerEvent, AcpSession, FileEntry, GitStatus, ProjectRef, TerminalSession, Workspace } from "@ainide/shared";
-import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, Notice, ReviewState } from "./types";
+import type { AcpActivity, AcpServerEvent, AcpSession, BuildCommand, FileEntry, GitFileComparison, GitStatus, ProjectRef, TerminalSession, Workspace } from "@ainide/shared";
+import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, GitComparisonRequest, GitComparisonRequestInput, GitComparisonState, Notice, ReviewState } from "./types";
 import type { ReferenceItem } from "./references";
 import { applyAcpServerEvent, type AcpClientState } from "./acp-state";
 import { captureProjectBag, emptyPanes, emptyProjectBag, type AcpPromptDraft, type ProjectUiBag } from "./project-ui";
 import { persistTerminalCollapsed, readTerminalCollapsedPreference } from "./layout-prefs";
+import { persistBuildSelection, readBuildSelections } from "./build-selections";
 import { language } from "./file-language";
 
 interface AppState {
@@ -26,6 +27,7 @@ interface AppState {
   secondaryOpen: boolean;
   focusedPaneId: EditorPaneId;
   git?: GitStatus;
+  gitComparisons: Record<string, GitComparisonState>;
   terminals: TerminalSession[];
   acpSessions: AcpSession[];
   acpHistory: Record<string, AcpActivity[]>;
@@ -40,6 +42,8 @@ interface AppState {
   referenceTargetId?: string;
   terminalCollapsed: boolean;
   terminalMaximized: boolean;
+  buildCommands: BuildCommand[];
+  buildSelections: Record<string, string>;
   notices: Notice[];
   review: ReviewState;
   recentChanges: Record<string, number>;
@@ -59,6 +63,11 @@ interface AppState {
   openSecondary: () => void;
   closeSecondary: () => void;
   setGit: (git?: GitStatus) => void;
+  beginGitComparison: (input: GitComparisonRequestInput) => number | undefined;
+  setGitComparisonResult: (input: GitComparisonRequest & { comparison: GitFileComparison }) => void;
+  setGitComparisonError: (input: GitComparisonRequest & { message: string }) => void;
+  invalidateGitComparison: (projectId: string, path: string) => void;
+  invalidateGitComparisons: (projectId?: string, head?: string) => void;
   setTerminals: (terminals: TerminalSession[]) => void;
   setAcpSessions: (sessions: AcpSession[]) => void;
   addAcpSession: (session: AcpSession) => void;
@@ -85,6 +94,8 @@ interface AppState {
   setMode: (mode: AppMode) => void;
   setTerminalCollapsed: (collapsed: boolean) => void;
   setTerminalMaximized: (maximized: boolean) => void;
+  setBuildCommands: (commands: BuildCommand[]) => void;
+  setBuildSelection: (projectId: string, label: string) => void;
   setTerminalError: (error?: string) => void;
   setPendingLocation: (location?: AppState["pendingLocation"]) => void;
   setProjectSession: (input: { activeProjectId?: string; openProjects: ProjectRef[]; knownProjects: ProjectRef[]; restoreError?: string }) => void;
@@ -109,6 +120,16 @@ function paneWith(panes: Record<EditorPaneId, EditorPaneState>, paneId: EditorPa
   return { ...panes, [paneId]: { ...panes[paneId], ...update } };
 }
 
+let nextGitComparisonRequestId = 0;
+
+export function gitComparisonKey(projectId: string, path: string, head?: string): string {
+  return JSON.stringify([projectId, path, head]);
+}
+
+function isCurrentGitComparisonRequest(state: AppState, request: GitComparisonRequestInput): boolean {
+  return state.token === request.token && state.activeProjectId === request.projectId;
+}
+
 export const useAppStore = create<AppState>((set) => ({
   token: "",
   openProjects: [],
@@ -123,6 +144,7 @@ export const useAppStore = create<AppState>((set) => ({
   panes: emptyPanes(),
   secondaryOpen: false,
   focusedPaneId: "primary",
+  gitComparisons: {},
   terminals: [],
   acpSessions: [],
   acpHistory: {},
@@ -132,10 +154,12 @@ export const useAppStore = create<AppState>((set) => ({
   referenceKit: [],
   terminalCollapsed: readTerminalCollapsedPreference(),
   terminalMaximized: false,
+  buildCommands: [],
+  buildSelections: readBuildSelections(),
   notices: [],
   review: { loading: false, scope: "working-tree" },
   recentChanges: {},
-  setToken: (token) => set({ token }),
+  setToken: (token) => set((current) => current.token === token ? { token } : { token, gitComparisons: {} }),
   setWorkspace: (workspace) => set({ workspace, directories: {}, expanded: {}, selectedPath: undefined }),
   setDirectory: (path, state) => set((current) => ({ directories: { ...current.directories, [path]: state } })),
   toggleDirectory: (path) => set((current) => ({ expanded: { ...current.expanded, [path]: !current.expanded[path] } })),
@@ -189,6 +213,61 @@ export const useAppStore = create<AppState>((set) => ({
     return { panes: { primary: { tabPaths, activePath: primary.activePath ?? secondary.activePath }, secondary: { tabPaths: [], activePath: undefined } }, secondaryOpen: false, focusedPaneId: "primary" };
   }),
   setGit: (git) => set({ git }),
+  beginGitComparison: (input) => {
+    const requestId = ++nextGitComparisonRequestId;
+    let accepted = false;
+    set((current) => {
+      if (!isCurrentGitComparisonRequest(current, input)) return current;
+      accepted = true;
+      const key = gitComparisonKey(input.projectId, input.path, input.head);
+      return {
+        gitComparisons: {
+          ...current.gitComparisons,
+          [key]: { status: "loading", projectId: input.projectId, path: input.path, ...(input.head !== undefined ? { head: input.head } : {}), requestId },
+        },
+      };
+    });
+    return accepted ? requestId : undefined;
+  },
+  setGitComparisonResult: (input) => set((current) => {
+    if (!isCurrentGitComparisonRequest(current, input)) return current;
+    const key = gitComparisonKey(input.projectId, input.path, input.head);
+    const pending = current.gitComparisons[key];
+    if (!pending || pending.status !== "loading" || pending.requestId !== input.requestId) return current;
+    if (input.comparison.head !== input.head) {
+      const gitComparisons = { ...current.gitComparisons };
+      delete gitComparisons[key];
+      return { gitComparisons };
+    }
+    const base = { projectId: input.projectId, path: input.path, ...(input.head !== undefined ? { head: input.head } : {}) };
+    const next: GitComparisonState = input.comparison.baseline === "unavailable"
+      ? { ...base, status: "unavailable", comparable: false, reason: input.comparison.unavailableReason ?? "unknown", comparison: input.comparison }
+      : { ...base, status: "ready", comparable: true, comparison: input.comparison };
+    return { gitComparisons: { ...current.gitComparisons, [key]: next } };
+  }),
+  setGitComparisonError: (input) => set((current) => {
+    if (!isCurrentGitComparisonRequest(current, input)) return current;
+    const key = gitComparisonKey(input.projectId, input.path, input.head);
+    const pending = current.gitComparisons[key];
+    if (!pending || pending.status !== "loading" || pending.requestId !== input.requestId) return current;
+    return {
+      gitComparisons: {
+        ...current.gitComparisons,
+        [key]: { status: "error", projectId: input.projectId, path: input.path, ...(input.head !== undefined ? { head: input.head } : {}), message: input.message },
+      },
+    };
+  }),
+  invalidateGitComparison: (projectId, path) => set((current) => ({
+    gitComparisons: Object.fromEntries(Object.entries(current.gitComparisons).filter(([, comparison]) => comparison.projectId !== projectId || comparison.path !== path)),
+  })),
+  invalidateGitComparisons: (projectId, head) => set((current) => {
+    const gitComparisons = Object.fromEntries(Object.entries(current.gitComparisons).filter(([, comparison]) => {
+      if (projectId !== undefined && comparison.projectId !== projectId) return true;
+      if (projectId !== undefined && head !== undefined) return comparison.head === head;
+      return false;
+    }));
+    return { gitComparisons };
+  }),
   setTerminals: (terminals) => set((current) => {
     const ids = new Set(terminals.map((terminal) => terminal.id));
     const agents = terminals.filter((terminal) => terminal.kind === "agent");
@@ -284,13 +363,18 @@ export const useAppStore = create<AppState>((set) => ({
     set({ terminalMaximized: false });
   },
   setTerminalError: (terminalError) => set({ terminalError }),
+  setBuildCommands: (buildCommands) => set({ buildCommands }),
+  setBuildSelection: (projectId, label) => {
+    persistBuildSelection(projectId, label);
+    set((current) => ({ buildSelections: { ...current.buildSelections, [projectId]: label } }));
+  },
   setPendingLocation: (pendingLocation) => set({ pendingLocation }),
   setProjectSession: (input) => set((current) => ({
     activeProjectId: input.activeProjectId,
     openProjects: input.openProjects,
     knownProjects: input.knownProjects,
     restoreError: input.restoreError,
-    ...(current.activeProjectId !== input.activeProjectId ? { acpHistory: {}, acpSequences: {}, acpQueued: {} } : {}),
+    ...(current.activeProjectId !== input.activeProjectId ? { acpHistory: {}, acpSequences: {}, acpQueued: {}, gitComparisons: {} } : {}),
   })),
   stashActiveBag: () => set((current) => {
     if (!current.activeProjectId) return current;
@@ -298,6 +382,7 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   restoreProjectBag: (projectId, workspace, fallback) => set((current) => {
     const bag = current.projectBags[projectId] ?? fallback ?? emptyProjectBag();
+    const projectChanged = current.activeProjectId !== projectId;
     return {
       workspace,
       activeProjectId: projectId,
@@ -324,6 +409,7 @@ export const useAppStore = create<AppState>((set) => ({
       referenceTargetId: bag.referenceTargetId,
       recentChanges: bag.recentChanges,
       review: { ...bag.review, url: undefined, message: undefined, loading: false },
+      ...(projectChanged ? { gitComparisons: {} } : {}),
     };
   }),
   applyDiskTabs: (tabs) => set({ tabs }),
@@ -333,11 +419,13 @@ export const useAppStore = create<AppState>((set) => ({
     ...emptyProjectBag(),
     acpSequences: {},
     acpQueued: {},
+    gitComparisons: {},
   }),
   removeProjectBag: (projectId) => set((current) => {
     const projectBags = { ...current.projectBags };
     delete projectBags[projectId];
-    return { projectBags };
+    const gitComparisons = Object.fromEntries(Object.entries(current.gitComparisons).filter(([, comparison]) => comparison.projectId !== projectId));
+    return { projectBags, gitComparisons };
   }),
   renameTabPath: (from, to) => set((current) => {
     const name = to.split(/[\\/]/).filter(Boolean).pop() ?? to;

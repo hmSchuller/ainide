@@ -6,9 +6,12 @@ import type {
   AcpServerEvent,
   AcpSession,
   AcpSessionDetail,
+  BuildCommand,
   FileEntry,
+  GitFileComparison,
   GitStatus,
   ProjectAgentSettings,
+  ProjectBuildCommands,
   ProjectRef,
   ProjectSessionSnapshot,
   RecentChange,
@@ -169,6 +172,11 @@ export async function getGitStatus(token: string): Promise<GitStatus> {
   return "status" in result ? result.status : result;
 }
 
+export async function getGitFileComparison(path: string, token: string): Promise<GitFileComparison> {
+  const query = new URLSearchParams({ path });
+  return request<GitFileComparison>(`/api/git/compare?${query.toString()}`, token);
+}
+
 export async function readFile(path: string, token: string): Promise<{ content: string; binary: boolean }> {
   const query = new URLSearchParams({ path });
   const response = await fetch(`/api/file?${query.toString()}`, { headers: headers(token) });
@@ -241,6 +249,19 @@ export async function updateProjectAgentSettings(token: string, rootPath: string
   });
 }
 
+export async function getProjectBuildCommands(token: string, projectId?: string): Promise<BuildCommand[]> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  const result = await request<ProjectBuildCommands>(`/api/project/builds${query}`, token);
+  return Array.isArray(result.commands) ? result.commands : [];
+}
+
+export async function updateProjectBuildCommands(token: string, rootPath: string, commands: BuildCommand[]): Promise<{ ok: boolean; rootPath: string; commands: BuildCommand[] }> {
+  return request("/api/project/builds", token, {
+    method: "PATCH",
+    body: JSON.stringify({ rootPath, commands }),
+  });
+}
+
 export async function getAcpSessions(token: string): Promise<AcpSession[]> {
   return request<AcpSession[]>("/api/acp/sessions", token);
 }
@@ -282,10 +303,10 @@ export async function closeAcpSession(id: string, token: string): Promise<void> 
   await request(`/api/acp/sessions/${encodeURIComponent(id)}`, token, { method: "DELETE" });
 }
 
-export async function createTerminal(kind: TerminalSession["kind"], token: string, title?: string): Promise<TerminalSession> {
+export async function createTerminal(kind: TerminalSession["kind"], token: string, title?: string, command?: string): Promise<TerminalSession> {
   const result = await request<TerminalResponse | TerminalSession>("/api/terminals", token, {
     method: "POST",
-    body: JSON.stringify({ kind, ...(title ? { title } : {}) }),
+    body: JSON.stringify({ kind, ...(title ? { title } : {}), ...(command !== undefined ? { command } : {}) }),
   });
   const terminal = "id" in result ? result : result.terminal ?? result.session;
   if (!terminal) throw new Error("The terminal service returned no session");
