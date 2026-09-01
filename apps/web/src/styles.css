@@ -193,12 +193,26 @@ kbd { color: #929dad; border: 1px solid #343c48; border-radius: 4px; padding: 1p
 .acp-new-activity { position: absolute; right: 14px; bottom: 12px; padding: 6px 9px; color: #0b241c; border: 1px solid var(--mint); border-radius: 4px; background: var(--mint); box-shadow: 0 5px 18px #0008; font-size: 10px; }
 .acp-new-activity:hover { background: #a2f0cb; }
 .acp-history-empty { margin: 35px auto; max-width: 260px; color: #687686; font-size: 11px; line-height: 1.5; text-align: center; }
-.acp-message, .acp-plan, .acp-tool, .acp-diff, .acp-terminal-activity, .acp-unknown, .acp-thought { margin: 0 0 8px; padding: 8px 9px; border: 1px solid #27333f; border-radius: 4px; background: #121920; }
+.acp-message, .acp-plan, .acp-tool, .acp-diff, .acp-terminal-activity, .acp-unknown, .acp-thought { min-width: 0; margin: 0 0 8px; padding: 8px 9px; border: 1px solid #27333f; border-radius: 4px; background: #121920; }
 .acp-message.user { border-color: #344a48; background: #172521; }
 .acp-activity-label { color: #718292; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
-.acp-message p, .acp-plan p { margin: 5px 0 0; color: #d2dae2; white-space: pre-wrap; font-size: 11px; line-height: 1.5; }
+.acp-plan p { margin: 5px 0 0; color: #d2dae2; white-space: pre-wrap; font-size: 11px; line-height: 1.5; }
+.acp-markdown { min-width: 0; margin-top: 5px; overflow-wrap: anywhere; color: #d2dae2; font-size: 11px; line-height: 1.5; }
+.acp-markdown > :first-child { margin-top: 0; }
+.acp-markdown > :last-child { margin-bottom: 0; }
+.acp-markdown p, .acp-markdown ul, .acp-markdown ol, .acp-markdown blockquote, .acp-markdown pre, .acp-markdown .acp-markdown-table-wrap { margin: 7px 0; }
+.acp-markdown h1, .acp-markdown h2, .acp-markdown h3, .acp-markdown h4, .acp-markdown h5, .acp-markdown h6 { margin: 10px 0 5px; color: #e5edf3; font-size: 1.05em; line-height: 1.25; }
+.acp-markdown h1 { font-size: 1.35em; }.acp-markdown h2 { font-size: 1.2em; }.acp-markdown h3 { font-size: 1.1em; }
+.acp-markdown ul, .acp-markdown ol { padding-left: 20px; }.acp-markdown li + li { margin-top: 3px; }
+.acp-markdown blockquote { padding-left: 9px; color: #aab8c3; border-left: 2px solid #456257; }
+.acp-markdown a { color: var(--blue); overflow-wrap: anywhere; }.acp-markdown a:hover { color: #a9c8ff; }.acp-markdown-link-inert, .acp-markdown-image-inert { color: #87939f; }
+.acp-markdown code { padding: 1px 4px; color: #c9e8d8; border: 1px solid #2c4940; border-radius: 3px; background: #17241f; font: .92em/1.3 "SFMono-Regular", Menlo, monospace; }
+.acp-markdown pre { max-width: 100%; overflow: auto; padding: 8px 9px; color: #c5d0d9; border: 1px solid #293943; border-radius: 4px; background: #0c1217; white-space: pre; font: 10px/1.5 "SFMono-Regular", Menlo, monospace; }
+.acp-markdown pre code { padding: 0; color: inherit; border: 0; background: transparent; font: inherit; }
+.acp-markdown-table-wrap { max-width: 100%; overflow-x: auto; }.acp-markdown table { min-width: max-content; border-collapse: collapse; font-size: 10px; }.acp-markdown th, .acp-markdown td { padding: 4px 7px; border: 1px solid #33434b; text-align: left; white-space: nowrap; }.acp-markdown th { color: #c9e8d8; background: #182620; font-weight: 700; }
+.acp-markdown input[type="checkbox"] { margin-right: 5px; accent-color: var(--mint); }
 .acp-thought summary, .acp-tool summary, .acp-diff summary, .acp-terminal-activity summary, .acp-unknown summary { display: flex; justify-content: space-between; gap: 10px; cursor: pointer; color: #becbd5; font-size: 11px; }
-.acp-thought p { margin: 7px 0 0; color: #9eabb7; white-space: pre-wrap; font: 10px/1.45 "SFMono-Regular", Menlo, monospace; }
+.acp-thought .acp-markdown { color: #9eabb7; font-size: 10px; line-height: 1.45; }.acp-thought .acp-markdown h1, .acp-thought .acp-markdown h2, .acp-thought .acp-markdown h3, .acp-thought .acp-markdown h4, .acp-thought .acp-markdown h5, .acp-thought .acp-markdown h6 { color: #b5c0ca; }.acp-thought .acp-markdown code { color: #b9d4c7; }
 .acp-tool summary small { color: var(--mint); font-size: 9px; }
 .acp-tool.failed summary, .acp-turn.failed { color: #ff9fa7; }
 .acp-tool pre, .acp-diff pre, .acp-terminal-activity pre, .acp-unknown pre { max-height: 180px; overflow: auto; margin: 7px 0 0; color: #9eabb7; white-space: pre-wrap; font: 10px/1.45 "SFMono-Regular", Menlo, monospace; }

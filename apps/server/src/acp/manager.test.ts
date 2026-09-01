@@ -81,8 +81,8 @@ describe("ACP session manager", () => {
     await prompt;
 
     expect(sessions.history(session.id)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "message", role: "user", text: "Make the change" }),
-      expect.objectContaining({ type: "message", role: "agent", text: "permission granted" }),
+      expect.objectContaining({ type: "message", role: "user", text: "Make the change", format: "markdown" }),
+      expect.objectContaining({ type: "message", role: "agent", text: "permission granted", format: "markdown" }),
       expect.objectContaining({ type: "turn", status: "completed" }),
     ]));
     await sessions.close();

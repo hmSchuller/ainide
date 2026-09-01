@@ -83,9 +83,9 @@ export function normalizeConfigOptions(options: readonly acp.SessionConfigOption
 export function normalizeSessionUpdate(update: acp.SessionUpdate): NormalizedAcpUpdate {
   switch (update.sessionUpdate) {
     case "user_message_chunk":
-      return { activities: contentActivity(update.messageId, "user", update.content) };
+      return { activities: contentActivity(update.messageId, "user", update.content, "markdown") };
     case "agent_message_chunk":
-      return { activities: contentActivity(update.messageId, "agent", update.content) };
+      return { activities: contentActivity(update.messageId, "agent", update.content, "markdown") };
     case "agent_thought_chunk":
       return { activities: contentActivity(update.messageId, "agent", update.content, "markdown", true) };
     case "tool_call":

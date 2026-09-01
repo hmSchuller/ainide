@@ -114,6 +114,15 @@ describe("ACP composer prompt dispatch", () => {
     request.resolve();
   });
 
+  it("submits Markdown source unchanged", () => {
+    const source = "## Keep this source\n\n- **as written**";
+    const { input, dispatch, request } = dispatchInput({ draft: { text: source, references: [] } });
+
+    expect(dispatchAcpPrompt(input)).toBe(true);
+    expect(dispatch).toHaveBeenCalledWith({ text: source });
+    request.resolve();
+  });
+
   it("does not dispatch or clear guarded submissions", () => {
     const empty = dispatchInput({ draft: emptyDraft() });
     const active = dispatchInput({ activePrompt: true });

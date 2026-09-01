@@ -18,7 +18,7 @@ describe("ACP normalization", () => {
     const second = normalizeSessionUpdate({ sessionUpdate: "agent_message_chunk", messageId: "message-1", content: { type: "text", text: " world" } });
     const history = first.activities.reduce((current, activity) => appendAcpActivity(current, activity), [] as typeof first.activities);
     const merged = second.activities.reduce((current, activity) => appendAcpActivity(current, activity), history);
-    expect(merged).toEqual([{ type: "message", id: "message-1", role: "agent", text: "Hello world" }]);
+    expect(merged).toEqual([{ type: "message", id: "message-1", role: "agent", text: "Hello world", format: "markdown" }]);
 
     const tool = normalizeSessionUpdate({
       sessionUpdate: "tool_call",

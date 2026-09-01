@@ -31,6 +31,15 @@ describe("ACP client event state", () => {
     expect(state.history["session-1"]).toEqual([{ type: "message", id: "message-1", role: "agent", text: "hello world" }]);
   });
 
+  it("retains explicit Markdown metadata and the complete streamed source", () => {
+    let state = applyAcpServerEvent(emptyAcpClientState(), { type: "snapshot", projectId: "project-1", sessions: [session()], history: {}, sequence: 0, sequences: { "session-1": 0 } });
+    const message = (sequence: number, text: string): AcpServerEvent => ({ type: "session_event", projectId: "project-1", sessionId: "session-1", sequence, event: { type: "activity", sessionId: "session-1", activity: { type: "message", id: "message-2", role: "user", format: "markdown", text } } });
+    state = applyAcpServerEvent(state, message(1, "**streamed "));
+    state = applyAcpServerEvent(state, message(2, "source**"));
+
+    expect(state.history["session-1"]).toEqual([{ type: "message", id: "message-2", role: "user", format: "markdown", text: "**streamed source**" }]);
+  });
+
   it("queues out-of-order events and ignores hidden-project events", () => {
     let state = applyAcpServerEvent(emptyAcpClientState(), { type: "snapshot", projectId: "project-1", sessions: [session()], history: {}, sequence: 0, sequences: { "session-1": 0 } });
     const status = (sequence: number, title: string): AcpServerEvent => ({ type: "session_event", projectId: "project-1", sessionId: "session-1", sequence, event: { type: "status", session: { ...session(), title } } });

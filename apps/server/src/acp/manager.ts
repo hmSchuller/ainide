@@ -283,7 +283,7 @@ export class AcpSessionManager {
 
     record.public.activePrompt = true;
     record.public.status = "live";
-    this.appendActivity(record, { type: "message", id: `user-${randomUUID()}`, role: "user", text: request.text });
+    this.appendActivity(record, { type: "message", id: `user-${randomUUID()}`, role: "user", text: request.text, format: "markdown" });
     this.publishStatus(record);
     const prompt = [{ type: "text" as const, text: request.text }, ...(request.context ?? []).map(contextBlock)];
     try {

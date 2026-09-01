@@ -11,6 +11,7 @@ import { ACP_SEND_LABEL, acpComposerKeyAction, dispatchAcpPrompt } from "../acp-
 import type { AcpPromptDraft } from "../project-ui";
 import { captureMentionedFileReference, removeGeneratedReferenceMention } from "../references";
 import { language } from "../file-language";
+import { MarkdownMessage } from "./MarkdownMessage";
 
 interface AgentWorkbenchProps {
   onNewAgent: () => void;
@@ -44,10 +45,10 @@ function SessionStatus({ entry }: { entry: AgentEntry }) {
   return <span className={`agent-status ${entry.kind === "pty" ? (entry.session.alive ? "live" : "exited") : entry.session.status === "live" ? "live" : ""}`}><i />{label}</span>;
 }
 
-function ActivityView({ activity, onOpenReference }: { activity: AcpActivity; onOpenReference: AgentWorkbenchProps["onOpenReference"] }) {
+export function ActivityView({ activity, onOpenReference }: { activity: AcpActivity; onOpenReference: AgentWorkbenchProps["onOpenReference"] }) {
   if (activity.type === "message") {
-    if (activity.thought) return <details className="acp-thought"><summary><span className="acp-activity-label">thinking</span></summary><p>{activity.text}</p></details>;
-    return <div className={`acp-message ${activity.role}`}><span className="acp-activity-label">{activity.role}</span><p>{activity.text}</p></div>;
+    if (activity.thought) return <details className="acp-thought"><summary><span className="acp-activity-label">thinking</span></summary><MarkdownMessage source={activity.text} /></details>;
+    return <div className={`acp-message ${activity.role}`}><span className="acp-activity-label">{activity.role}</span><MarkdownMessage source={activity.text} /></div>;
   }
   if (activity.type === "tool_call") return <details className={`acp-tool ${activity.status}`} open={activity.status === "running"}><summary><span>{activity.title}</span><small>{activity.status}</small></summary>{activity.input && <pre>{activity.input}</pre>}{activity.output && <pre>{activity.output}</pre>}</details>;
   if (activity.type === "plan") return <div className="acp-plan"><span className="acp-activity-label">plan{activity.status ? ` · ${activity.status}` : ""}</span><p>{activity.text}</p></div>;
