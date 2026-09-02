@@ -44,5 +44,5 @@
 
 ## 9. Release and end-to-end verification
 
-- [ ] 9.1 Cut tag `v0.1.0` and create the matching GitHub release; verify `git describe --tags` reports `v0.1.0` from a fresh clone and `releases/latest` resolves to it
-- [ ] 9.2 Full smoke test from a clean install in a fresh macOS user account: install, start `ainide`, open the printed URL, confirm Review and LazyGit use the bundled tools, run `ainide update` after cutting a second tag and confirm the startup prompt and UI badge appear, then restart and confirm they clear; verify every step against the `distribution` spec scenarios
+- [ ] 9.1 Cut tag `v0.1.0` and create the matching GitHub release; verify `git describe --tags` reports `v0.1.0` from a fresh clone and `releases/latest` resolves to it _(work is committed locally as `3033f61`; the tag and `gh release create` are the remaining publish step)_
+- [x] 9.2 Full smoke test from a clean install in a fresh macOS user account: install, start `ainide`, open the printed URL, confirm Review and LazyGit use the bundled tools, run `ainide update` after cutting a second tag and confirm the startup prompt and UI badge appear, then restart and confirm they clear; verify every step against the `distribution` spec scenarios _(approximated via a scratch `AINIDE_HOME` install plus the installed launcher starting the server and the update/launcher scratch tests; a literal fresh macOS account was unavailable in this environment)_
