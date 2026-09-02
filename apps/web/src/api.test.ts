@@ -8,7 +8,7 @@ describe("ACP web API", () => {
   });
 
   it("sends session tokens and JSON bodies for ACP requests", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/providers")) return new Response(JSON.stringify([{ id: "fake", label: "Fake" }]), { status: 200, headers: { "content-type": "application/json" } });
       return new Response(JSON.stringify({ id: "session-1", status: "live" }), { status: 200, headers: { "content-type": "application/json" } });
@@ -63,7 +63,7 @@ describe("ACP web API", () => {
 
   it("uses the authenticated Git status route", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      expect((init?.headers as Record<string, string>)["x-session-token"]).toBe("token-git");
+      expect(((init?.headers as Record<string, string>) ?? {})["x-session-token"]).toBe("token-git");
       return new Response(JSON.stringify({ isRepository: true, dirty: false, files: [], summary: { filesChanged: 0, insertions: 0, deletions: 0 } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -73,8 +73,8 @@ describe("ACP web API", () => {
   });
 
   it("requests a workspace-relative Git baseline through the authenticated route", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect((init?.headers as Record<string, string>)["x-session-token"]).toBe("token-git");
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(((init?.headers as Record<string, string>) ?? {})["x-session-token"]).toBe("token-git");
       return new Response(JSON.stringify({ path: "src/a.ts", status: "modified", baseline: "head", head: "abc", isRepository: true, content: "before\n" }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -95,8 +95,8 @@ describe("ACP web API", () => {
   });
 
   it("requests one directory level with an optional final-segment query", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect((init?.headers as Record<string, string>)["x-session-token"]).toBe("token-path");
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(((init?.headers as Record<string, string>) ?? {})["x-session-token"]).toBe("token-path");
       return new Response(JSON.stringify({ currentPath: "/home/me", parentPath: "/home", homePath: "/home/me", children: [{ name: "projects", path: "/home/me/projects" }] }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);

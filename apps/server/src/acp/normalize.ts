@@ -299,11 +299,6 @@ function cleanText(value: string | null | undefined, fallback: string): string {
   return clean || fallback;
 }
 
-function cleanOptionalText(value: string | null | undefined): string | undefined {
-  const clean = typeof value === "string" ? value.trim() : "";
-  return clean || undefined;
-}
-
 function cleanOptionalTitle(value: unknown): string | undefined {
   const clean = typeof value === "string" ? value.trim() : "";
   return clean ? clean.slice(0, MAX_TITLE_LENGTH) : undefined;

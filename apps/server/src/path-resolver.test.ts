@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { UnsafePathError, expandTildePath, normalizeWorkspacePath, resolveSafePath } from "./path-resolver.js";
+import { expandTildePath, normalizeWorkspacePath, resolveSafePath, UnsafePathError } from "./path-resolver.js";
 
 describe("normalizeWorkspacePath", () => {
   it("expands supported tilde paths and returns canonical directories", async () => {

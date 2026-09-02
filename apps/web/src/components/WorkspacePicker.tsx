@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ChangeEventHandler, type KeyboardEventHandler } from "react";
 import type { ProjectRef, WorkspaceDirectoryChild } from "@ainide/shared";
+import { type ChangeEventHandler, type KeyboardEventHandler, useEffect, useRef, useState } from "react";
 import { getWorkspaceDirectoryChildren } from "../api";
 import { displayWorkspacePath, isAbsoluteWorkspacePath, workspacePathCompletion } from "../workspace-path";
 
@@ -35,13 +35,15 @@ export function WorkspacePickerManualEntry({
   onKeyDown,
   onSuggestionSelect,
 }: WorkspacePickerManualEntryProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
   return (
     <div className="picker-manual-entry">
       <label className="field-label" htmlFor="workspace-path">Directory path</label>
       <div className="path-entry picker-path-entry">
         <input
           id="workspace-path"
-          autoFocus
+          ref={inputRef}
           role="combobox"
           aria-autocomplete="list"
           aria-controls="workspace-path-suggestions"
@@ -54,8 +56,13 @@ export function WorkspacePickerManualEntry({
           spellCheck={false}
         />
         {suggestions.length > 0 && (
+          /* Combobox listbox follows the aria-activedescendant pattern; focus stays on the input */
+          /* biome-ignore lint/a11y/noStaticElementInteractions: options are navigated from the combobox input */
+          /* biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: combobox pattern manages focus on the input */
           <ul id="workspace-path-suggestions" className="picker-suggestions" role="listbox" aria-label="Directory suggestions">
             {suggestions.map((suggestion, index) => (
+              /* biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: combobox pattern manages focus on the input */
+              /* biome-ignore lint/a11y/useFocusableInteractive: combobox pattern manages focus on the input */
               <li key={suggestion.path} id={`workspace-path-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion}>
                 <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => onSuggestionSelect(suggestion.path)}>{suggestion.name}</button>
               </li>
@@ -119,15 +126,15 @@ export function WorkspacePicker({ token, recentProjects = [], busy, error, onOpe
     }
   };
 
+  // A picker mount is a new browsing session: load "~" once; token changes
+  // restart the browse session, loadDirectory identity must not.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional mount-only browsing session
   useEffect(() => {
     void loadDirectory("~");
     return () => {
       ++browseGeneration.current;
       ++suggestionGeneration.current;
     };
-    // A picker mount is a new browsing session. Its token is the only input that can change
-    // while the session is alive.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   useEffect(() => {
@@ -250,7 +257,7 @@ export function WorkspacePicker({ token, recentProjects = [], busy, error, onOpe
           }}
           onSuggestionSelect={navigate}
         />
-        <button className="primary-button open-button" onClick={() => submit()} disabled={busy || !path.trim()}>
+        <button type="button" className="primary-button open-button" onClick={() => submit()} disabled={busy || !path.trim()}>
           {busy ? "Opening workspace..." : "Open project"}
           <span>↵</span>
         </button>

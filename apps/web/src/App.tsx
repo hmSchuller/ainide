@@ -1,34 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from "react";
 import type { AcpSession, BuildCommand, FileEntry, GitStatus, ProjectAgentSettings, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
-import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getGitFileComparison, getGitStatus, getProjectAgentSettings, getProjectBuildCommands, getReviewStatus, getSession, getVersion, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, updateProjectAgentSettings, updateProjectBuildCommands, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getGitFileComparison, getGitStatus, getProjectAgentSettings, getProjectBuildCommands, getReviewStatus, getSession, getTerminals, getVersion, listFiles, openProject, type ProjectMutationResponse, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, updateProjectAgentSettings, updateProjectBuildCommands, websocketUrl, writeFile } from "./api";
+import { createAutoSaver } from "./auto-save";
+import { copyTextToClipboard } from "./clipboard";
+import { AcpProviderPicker } from "./components/AcpProviderPicker";
+import { AgentWorkbench } from "./components/AgentWorkbench";
+import { BuildRunner } from "./components/BuildRunner";
 import { EditorSurface, language } from "./components/Editor";
 import { Explorer } from "./components/Explorer";
+import { LazyGitSurface } from "./components/LazyGitSurface";
+import { ProjectAgentSettingsDialog } from "./components/ProjectAgentSettingsDialog";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
+import { ReferenceDock } from "./components/ReferenceDock";
 import { ReviewSurface } from "./components/ReviewSurface";
 import { TerminalPanel } from "./components/TerminalPanel";
-import { AgentWorkbench } from "./components/AgentWorkbench";
-import { AcpProviderPicker } from "./components/AcpProviderPicker";
-import { ProjectAgentSettingsDialog } from "./components/ProjectAgentSettingsDialog";
-import { BuildRunner } from "./components/BuildRunner";
-import { LazyGitSurface } from "./components/LazyGitSurface";
-import { ReferenceDock } from "./components/ReferenceDock";
-import { WorkspacePicker } from "./components/WorkspacePicker";
 import { UpdateBadge } from "./components/UpdateBadge";
-import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, snapshotFromBag } from "./project-ui";
-import { createAutoSaver } from "./auto-save";
+import { WorkspacePicker } from "./components/WorkspacePicker";
+import { basenameFromPath, joinWorkspacePath, renameEntryPath } from "./explorer-actions";
 import { createGitPollingScheduler } from "./git-polling";
 import { createGitRequestCoordinator } from "./git-request";
-import { findPaneForPath, gitComparisonKey, isDirty, useAppStore } from "./store";
-import type { EditorPaneId, EditorTab } from "./types";
-import type { CodeSelection } from "./references";
-import { captureFileReference, captureSelectionReference, captureTextFileReference, copyReference } from "./references";
-import { copyTextToClipboard } from "./clipboard";
-import { basenameFromPath, joinWorkspacePath, renameEntryPath } from "./explorer-actions";
 import { shouldShowReferenceDock, terminalPanelVisible } from "./layout-prefs";
 import { PRIMARY_MODE_LABELS, PRIMARY_MODES } from "./navigation";
-import { lazygitTerminals, shouldStartLazygitSession } from "./terminal-ownership";
+import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, snapshotFromBag } from "./project-ui";
 import { projectRefFromMutation, readRecentProjects, rememberRecentProject, writeRecentProjects } from "./recent-projects";
+import type { CodeSelection } from "./references";
+import { captureFileReference, captureSelectionReference, captureTextFileReference, copyReference } from "./references";
+import { findPaneForPath, gitComparisonKey, isDirty, useAppStore } from "./store";
+import { lazygitTerminals, shouldStartLazygitSession } from "./terminal-ownership";
+import type { EditorPaneId, EditorTab } from "./types";
 
 type PaletteAction = { label: string; shortcut?: string; run: () => void };
 
@@ -418,6 +418,9 @@ export default function App() {
     await acceptMutation(result, token, true);
   };
 
+  // One-shot startup request; workspace changes are explicit. Handlers below
+  // are bootstrap-only and the hook must never re-run.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional mount-only bootstrap
   useEffect(() => {
     void (async () => {
       try {
@@ -435,10 +438,11 @@ export default function App() {
         setPickerError(error instanceof Error ? error.message : "Could not connect to the ainide server");
       } finally { setStarting(false); }
     })();
-    // This is the one startup request; workspace changes are explicit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Events are reconnected when the session token changes; message handlers
+  // read live state through useAppStore.getState(), not render closures.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: handler tokens are re-read from the store at event time
   useEffect(() => {
     if (!token) return;
     const socket = new WebSocket(websocketUrl("/events", token));
@@ -460,8 +464,6 @@ export default function App() {
     };
     socket.onerror = () => setNotice("Live workspace events disconnected", "error");
     return () => socket.close();
-    // Events are reconnected when the session token changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   useEffect(() => {
@@ -488,6 +490,9 @@ export default function App() {
     };
   }, [token, applyAcpEvent]);
 
+  // The tab/pane/mode/terminal/dir deps are the debounce TRIGGERS, not values
+  // read inside the callback (which re-reads live state from the store).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deps act as change triggers for the debounced snapshot
   useEffect(() => {
     if (!token || !workspace || !activeProjectId) return;
     const timer = window.setTimeout(() => {
@@ -566,14 +571,15 @@ export default function App() {
     }
   };
 
+  // The scheduler is recreated only when its project, token, or repository kind
+  // changes; requestGitStatus identity is deliberately not a trigger.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: polling re-created only on project/token/repo-kind change
   useEffect(() => {
     if (!token || !workspace || !activeProjectId || git?.isRepository !== true) return;
     const projectId = activeProjectId;
     const scheduler = createGitPollingScheduler(async () => { await requestGitStatus(token, projectId, { probeOpenFiles: true }); });
     scheduler.start();
     return () => scheduler.stop();
-    // The scheduler is recreated only when its project, token, or repository kind changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, workspace?.rootPath, activeProjectId, git?.isRepository]);
 
   const switchToReview = async (restart = false) => {
@@ -854,6 +860,9 @@ export default function App() {
      { label: "Restart Review", run: () => { setPaletteOpen(false); void switchToReview(true); } },
   ].filter((action) => !query || fuzzy(action.label, query));
 
+  // Keyboard commands intentionally rebind when the editor state they act on
+  // changes (tabs/panes focus); ⌘S and ⌘J resolve live state from the store.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rebind only when the bound shortcuts' inputs change
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       const command = event.metaKey || event.ctrlKey;
@@ -871,9 +880,7 @@ export default function App() {
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-    // Keyboard commands intentionally use current actions from this render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [tabs, panes, focusedPaneId, token]);
+   }, [tabs, panes, focusedPaneId]);
 
   useEffect(() => {
     if (!quickOpen || !query || !token) { setSearchResults([]); return; }
@@ -890,7 +897,7 @@ export default function App() {
   const changedRecently = Object.values(recentChanges).filter((time) => Date.now() - time < 10 * 60 * 1000).length;
   return <div className={`app-shell ${mobileSidebar ? "mobile-sidebar-open" : ""}`}>
     <header className="topbar">
-      <button className="mobile-menu" onClick={() => setMobileSidebar(!mobileSidebar)}>☰</button>
+      <button type="button" className="mobile-menu" onClick={() => setMobileSidebar(!mobileSidebar)}>☰</button>
       <ProjectSwitcher
         activeName={workspace.name || fileName(workspace.rootPath)}
         openProjects={openProjects}
@@ -908,9 +915,9 @@ export default function App() {
             else if (entry === "lazygit") void switchToLazyGit();
             else setMode(entry);
           };
-           return <button key={entry} className={active ? "active" : ""} role="tab" aria-selected={active} onClick={onClick}>{label}{entry === "agents" && <span className="mode-count">{terminals.filter((terminal) => terminal.kind === "agent" && terminal.alive).length + acpSessions.filter((session) => session.status === "live" || session.status === "waiting").length}</span>}</button>;
+           return <button type="button" key={entry} className={active ? "active" : ""} role="tab" aria-selected={active} onClick={onClick}>{label}{entry === "agents" && <span className="mode-count">{terminals.filter((terminal) => terminal.kind === "agent" && terminal.alive).length + acpSessions.filter((session) => session.status === "live" || session.status === "waiting").length}</span>}</button>;
         })}</div>
-        <div className="top-actions"><UpdateBadge version={version} /><BuildRunner onOpenSettings={openProjectSettings} /><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
+        <div className="top-actions"><UpdateBadge version={version} /><BuildRunner onOpenSettings={openProjectSettings} /><button type="button" className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button type="button" className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
     <div className="workbench">
         <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer
@@ -930,9 +937,8 @@ export default function App() {
       }} />
        <main className="main-column">
           <div className="mode-surface" hidden={mode !== "edit"}>
-           <EditorSurface
-               onSave={(tab) => void saveFile(tab)}
-               onContentChange={handleContentChange}
+            <EditorSurface
+                onContentChange={handleContentChange}
                flushAutoSave={(path) => autoSaver.flush(path)}
                cancelAutoSave={(path) => autoSaver.cancel(path)}
                onCopySelection={(tab, selection) => addSelectionReference(tab, selection, true)}
@@ -950,8 +956,10 @@ export default function App() {
          {terminalPanelVisible(mode) && <TerminalPanel onNewTerminal={(kind) => void newTerminal(kind)} onOpenReference={openReference} />}
       </main>
     </div>
-    <div className="notices">{notices.map((notice) => <button className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)}>{notice.text}<span>×</span></button>)}</div>
+    <div className="notices">{notices.map((notice) => <button type="button" className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)}>{notice.text}<span>×</span></button>)}</div>
     {terminalError && mode !== "lazygit" && <div className="terminal-error-toast"><b>Terminal note</b> {terminalError}</div>}
+      {/* Adding-project overlay double-clicks dismiss the modal; the picker owns Escape/close */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismiss; the picker itself owns close/Escape */}
       {addingProject && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddingProject(false); }}>
        <WorkspacePicker token={token} recentProjects={recentProjects.filter((project) => project.projectId !== activeProjectId)} busy={pickerBusy} error={pickerError} onOpen={(path) => {
         setPickerBusy(true); setPickerError(undefined);
@@ -960,10 +968,13 @@ export default function App() {
      </div>}
     {providerPickerOpen && <AcpProviderPicker providers={agentSettings?.all ?? []} disabled={agentSettings?.disabled ?? []} loading={agentSettingsLoading} error={agentSettingsError} startingProviderId={startingProviderId} onRetry={() => void loadAgentSettings()} onSelect={(providerId) => void startAcpProvider(providerId)} onClose={() => setProviderPickerOpen(false)} />}
     {projectSettingsOpen && <ProjectAgentSettingsDialog settings={agentSettings} builds={buildCommands} loading={agentSettingsLoading} error={agentSettingsError} onRetry={() => void loadAgentSettings()} onToggle={(providerId, disabled) => void toggleAgentDisabled(providerId, disabled)} onSaveBuilds={saveProjectBuilds} onClose={() => setProjectSettingsOpen(false)} />}
+    {/* Palette/quick-open overlay double-clicks dismiss the modal; Escape and close controls exist */}
+    {/* biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismiss; the palette owns Escape/close */}
     {(paletteOpen || quickOpen) && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) { setPaletteOpen(false); setQuickOpen(false); } }}>
       <div className="command-modal">
+        {/* biome-ignore lint/a11y/noAutofocus: command palette focuses its input when opened */}
         <div className="command-input"><span>{quickOpen ? "⌕" : "⌘"}</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={quickOpen ? "Search files..." : "Type a command..."} onKeyDown={(event) => { if (event.key === "Escape") { setQuickOpen(false); setPaletteOpen(false); } }} /></div>
-        <div className="command-list">{quickOpen ? (quickResults.length ? quickResults.map((entry) => <button key={entry.path} onClick={() => { setQuickOpen(false); void openFile(entry); }}>{entry.name}<small>{entry.path}</small></button>) : <div className="command-empty">No loaded files match. Expand folders in the explorer to index them.</div>) : (paletteActions.length ? paletteActions.map((action) => <button key={action.label} onClick={action.run}><span>{action.label}</span>{action.shortcut && <kbd>{action.shortcut}</kbd>}</button>) : <div className="command-empty">No commands match.</div>)}</div>
+        <div className="command-list">{quickOpen ? (quickResults.length ? quickResults.map((entry) => <button type="button" key={entry.path} onClick={() => { setQuickOpen(false); void openFile(entry); }}>{entry.name}<small>{entry.path}</small></button>) : <div className="command-empty">No loaded files match. Expand folders in the explorer to index them.</div>) : (paletteActions.length ? paletteActions.map((action) => <button type="button" key={action.label} onClick={action.run}><span>{action.label}</span>{action.shortcut && <kbd>{action.shortcut}</kbd>}</button>) : <div className="command-empty">No commands match.</div>)}</div>
       </div>
     </div>}
   </div>;

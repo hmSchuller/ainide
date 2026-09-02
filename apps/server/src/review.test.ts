@@ -1,12 +1,12 @@
-import { createServer } from "node:http";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  ReviewManager,
   buildDifitArgs,
+  ReviewManager,
   validateReviewScope,
   waitForHttpReady,
 } from "./review.js";

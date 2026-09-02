@@ -4,8 +4,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
 import Fastify from "fastify";
+import { describe, expect, it } from "vitest";
 import { busyPortMessage, isBusyPortError, listen } from "./listen.js";
 
 const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

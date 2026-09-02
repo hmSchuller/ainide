@@ -1,5 +1,5 @@
-import { useEffect } from "react";
 import type { AcpProviderDescriptor } from "@ainide/shared";
+import { useEffect } from "react";
 
 interface AcpProviderPickerProps {
   providers: AcpProviderDescriptor[];
@@ -24,7 +24,10 @@ export function AcpProviderPicker({ providers, disabled = [], loading, error, st
   const disabledIds = new Set(disabled);
   const enabled = providers.filter((provider) => !disabledIds.has(provider.id));
 
-  return <div className="overlay acp-picker-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !startingProviderId) onClose(); }}>
+  // Provider-picker overlay double-clicks dismiss the modal; dialog owns Escape/close
+  return (
+    /* biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismiss; the picker itself owns close/Escape */
+    <div className="overlay acp-picker-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !startingProviderId) onClose(); }}>
     <section className="acp-provider-picker" role="dialog" aria-modal="true" aria-labelledby="acp-provider-picker-title">
       <header className="acp-provider-picker-header">
         <div><span className="eyebrow">ACP PROVIDERS</span><h2 id="acp-provider-picker-title">Start an agent</h2></div>
@@ -35,8 +38,11 @@ export function AcpProviderPicker({ providers, disabled = [], loading, error, st
       {!loading && error && <div className="acp-picker-state error-box" role="alert"><span>{error}</span><button type="button" onClick={onRetry}>Retry</button></div>}
       {!loading && !error && !providers.length && <div className="acp-picker-state" role="status"><strong>No ACP providers configured</strong><span>Add an entry to <code>acpAgents</code> in the local ainide configuration, then retry.</span><button type="button" onClick={onRetry}>Check again</button></div>}
       {!loading && !error && providers.length > 0 && !enabled.length && <div className="acp-picker-state" role="status"><strong>No ACP providers available for this project</strong><span>Every configured provider is disabled here. Re-enable one from Project settings.</span><button type="button" onClick={onRetry}>Check again</button></div>}
-      {!loading && !error && enabled.length > 0 && <div className="acp-provider-list" aria-label="Configured ACP providers">{enabled.map((provider) => <button type="button" className={`acp-provider-option ${startingProviderId === provider.id ? "starting" : ""}`} key={provider.id} disabled={Boolean(startingProviderId)} onClick={() => onSelect(provider.id)}><span className="acp-provider-glyph">◎</span><span><strong>{provider.label}</strong><small>{startingProviderId === provider.id ? "Starting session..." : "Start a new session"}</small></span><span className="acp-provider-arrow">→</span></button>)}</div>}
+      {/* Layout container naming a control group; a fieldset would change layout semantics */}
+      {/* biome-ignore lint/a11y/useSemanticElements: grouped action list, not a form field group */}
+      {!loading && !error && enabled.length > 0 && <div className="acp-provider-list" role="group" aria-label="Configured ACP providers">{enabled.map((provider) => <button type="button" className={`acp-provider-option ${startingProviderId === provider.id ? "starting" : ""}`} key={provider.id} disabled={Boolean(startingProviderId)} onClick={() => onSelect(provider.id)}><span className="acp-provider-glyph">◎</span><span><strong>{provider.label}</strong><small>{startingProviderId === provider.id ? "Starting session..." : "Start a new session"}</small></span><span className="acp-provider-arrow">→</span></button>)}</div>}
       {!loading && !error && <button type="button" className="acp-picker-cancel" onClick={onClose} disabled={Boolean(startingProviderId)}>Cancel</button>}
     </section>
-  </div>;
+    </div>
+  );
 }

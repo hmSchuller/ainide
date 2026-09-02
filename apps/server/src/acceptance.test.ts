@@ -1,9 +1,9 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import { missingTerminalKinds } from "@ainide/shared";
-import { createServer, type AinideServer } from "./server.js";
+import { describe, expect, it } from "vitest";
+import { type AinideServer, createServer } from "./server.js";
 import { saveSessionSnapshot } from "./sessions.js";
 
 async function tempProject(prefix: string): Promise<string> {

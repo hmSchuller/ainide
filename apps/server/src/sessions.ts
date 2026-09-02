@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { parseAcpProviderPreferences, parseAcpSessionDescriptors, parseAgentSessionDescriptors, parseAppMode, type ProjectSessionSnapshot, type SessionSnapshot, type TerminalKind } from "@ainide/shared";
+import { type ProjectSessionSnapshot, parseAcpProviderPreferences, parseAcpSessionDescriptors, parseAgentSessionDescriptors, parseAppMode, type SessionSnapshot, type TerminalKind } from "@ainide/shared";
 import { sessionsFilePath } from "./config.js";
 
 const SESSION_VERSION = 1;

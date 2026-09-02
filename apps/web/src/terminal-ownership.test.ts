@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { DEFAULT_TERMINAL_KINDS, missingTerminalKinds, type TerminalSession } from "@ainide/shared";
+import { describe, expect, it } from "vitest";
 import { agentTerminals, lazygitTerminals, selectLazygitSession, shouldStartLazygitSession, utilityTerminals } from "./terminal-ownership";
 
 function session(overrides: Partial<TerminalSession> = {}): TerminalSession {

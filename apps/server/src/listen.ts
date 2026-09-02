@@ -11,6 +11,7 @@ export interface ListenOptions {
  * trace. Any other listen error is rethrown unchanged.
  */
 export async function listen(app: FastifyInstance, host: string, port: number, options: ListenOptions = {}): Promise<void> {
+  // biome-ignore lint/suspicious/noConsole: intended foreground CLI output
   const log = options.log ?? ((message: string) => console.error(message));
   const exit = options.exit ?? ((code: number) => process.exit(code));
   try {

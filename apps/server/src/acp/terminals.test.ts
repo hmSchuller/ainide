@@ -1,8 +1,8 @@
 import { mkdtemp, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import type { AcpSession } from "@ainide/shared";
+import { describe, expect, it } from "vitest";
 import { AcpTerminalManager } from "./terminals.js";
 
 function session(id: string, rootPath: string): AcpSession {

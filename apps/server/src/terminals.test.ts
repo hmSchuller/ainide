@@ -1,12 +1,12 @@
+import { EventEmitter } from "node:events";
 import { chmodSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { EventEmitter } from "node:events";
 import { missingTerminalKinds } from "@ainide/shared";
-import { TerminalManager } from "./terminals.js";
+import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { TerminalManager } from "./terminals.js";
 
 async function waitForExit(manager: TerminalManager, id: string, timeoutMs = 3000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

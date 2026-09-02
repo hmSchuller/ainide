@@ -3,12 +3,12 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewScope } from "@ainide/shared";
-import { createServer, type AinideServer } from "./server.js";
-import { saveSessionSnapshot } from "./sessions.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProjectRegistry } from "./projects.js";
 import { ReviewManager } from "./review.js";
+import { type AinideServer, createServer } from "./server.js";
+import { saveSessionSnapshot } from "./sessions.js";
 
 async function tempProject(prefix: string): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), prefix));

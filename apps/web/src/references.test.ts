@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { appendReferenceItems, captureFileReference, captureMentionedFileReference, captureSelectionReference, captureTextFileReference, copyReferenceKit, promptContextFromReferences, removeGeneratedReferenceMention, serializeReference, serializeReferenceKit } from "./references";
 import { language } from "./file-language";
+import { appendReferenceItems, captureFileReference, captureMentionedFileReference, captureSelectionReference, captureTextFileReference, copyReferenceKit, promptContextFromReferences, removeGeneratedReferenceMention, serializeReference, serializeReferenceKit } from "./references";
 
 describe("references", () => {
   it("normalizes a selection to inclusive complete lines", () => {

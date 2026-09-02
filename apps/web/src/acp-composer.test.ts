@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import type { AcpPromptRequest } from "@ainide/shared";
+import { describe, expect, it, vi } from "vitest";
 import { acpComposerKeyAction, dispatchAcpPrompt } from "./acp-composer";
 import type { AcpPromptDraft } from "./project-ui";
 import type { ReferenceItem } from "./references";

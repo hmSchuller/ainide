@@ -1,4 +1,4 @@
-import type { AppMode, TerminalKind, TerminalSession } from "@ainide/shared";
+import type { TerminalKind, TerminalSession } from "@ainide/shared";
 
 export const UTILITY_TERMINAL_KINDS: readonly TerminalKind[] = ["shell", "custom", "build"];
 

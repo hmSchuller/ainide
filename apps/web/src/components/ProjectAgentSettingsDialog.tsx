@@ -1,5 +1,5 @@
-import { useState } from "react";
 import type { BuildCommand, ProjectAgentSettings } from "@ainide/shared";
+import { useState } from "react";
 
 interface ProjectAgentSettingsDialogProps {
   settings: ProjectAgentSettings | null;
@@ -77,7 +77,10 @@ export function ProjectAgentSettingsDialog({ settings, builds, loading, error, o
     }
   };
 
-  return <div className="overlay acp-picker-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  // Settings overlay double-clicks dismiss the modal; the dialog owns close
+  return (
+    /* biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismiss; the dialog itself owns close/Escape */
+    <div className="overlay acp-picker-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="acp-provider-picker project-agent-settings" role="dialog" aria-modal="true" aria-labelledby="project-agent-settings-title">
       <header className="acp-provider-picker-header">
         <div><span className="eyebrow">PROJECT SETTINGS</span><h2 id="project-agent-settings-title">Agents for this project</h2></div>
@@ -87,7 +90,9 @@ export function ProjectAgentSettingsDialog({ settings, builds, loading, error, o
       {loading && <div className="acp-picker-state" role="status">Loading agent settings...</div>}
       {!loading && error && <div className="acp-picker-state error-box" role="alert"><span>{error}</span><button type="button" onClick={onRetry}>Retry</button></div>}
       {!loading && !error && settings && !settings.all.length && <div className="acp-picker-state" role="status"><strong>No ACP providers configured</strong><span>Add an entry to <code>acpAgents</code> in the local ainide configuration.</span></div>}
-      {!loading && !error && settings && settings.all.length > 0 && <div className="acp-provider-list" aria-label="Configured ACP agents">{settings.all.map((provider) => {
+      {/* Layout container naming an agent group; a fieldset would change layout semantics */}
+      {/* biome-ignore lint/a11y/useSemanticElements: grouped agent toggles, not a form field group */}
+      {!loading && !error && settings && settings.all.length > 0 && <div className="acp-provider-list" role="group" aria-label="Configured ACP agents">{settings.all.map((provider) => {
         const isDisabled = disabledIds.has(provider.id);
         return <button type="button" key={provider.id} className={`acp-provider-option agent-settings-option ${isDisabled ? "disabled" : ""}`} onClick={() => onToggle(provider.id, !isDisabled)} aria-pressed={!isDisabled}>
           <span className="acp-provider-glyph">{isDisabled ? "○" : "◎"}</span>
@@ -98,6 +103,8 @@ export function ProjectAgentSettingsDialog({ settings, builds, loading, error, o
       {!loading && !error && <section className="build-settings-section" aria-label="Build commands">
         <h3 className="build-settings-title">Build commands</h3>
         <p className="build-settings-copy">Runs in this project's root when you press play in the top bar. At most {MAX_BUILD_ROWS} commands, labels up to {MAX_BUILD_LABEL_LENGTH} and commands up to {MAX_BUILD_COMMAND_LENGTH} characters.</p>
+        {/* Rows are position-tracked and fully controlled; values live in state, not DOM keys */}
+        {/* biome-ignore lint/suspicious/noArrayIndexKey: controlled row inputs, identity tracked in rows state */}
         {rows.map((row, index) => <div className="build-settings-row" key={index}>
           <input className="build-settings-label" value={row.label} placeholder="Label" aria-label={`Build command ${index + 1} label`} onChange={(event) => setRows(updateBuildRow(rows, index, { label: event.target.value }))} />
           <input className="build-settings-command" value={row.command} placeholder="Command" aria-label={`Build command ${index + 1} command`} onChange={(event) => setRows(updateBuildRow(rows, index, { command: event.target.value }))} />
@@ -110,5 +117,6 @@ export function ProjectAgentSettingsDialog({ settings, builds, loading, error, o
       </section>}
       {!loading && !error && <button type="button" className="acp-picker-cancel" onClick={() => void save()} disabled={buildsSaving}>{buildsSaving ? "Saving..." : "Done"}</button>}
     </section>
-  </div>;
+    </div>
+  );
 }

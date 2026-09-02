@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
 import type { AcpProviderPreference, AcpServerEvent } from "@ainide/shared";
+import { describe, expect, it, vi } from "vitest";
 import type { AinideConfig } from "../config.js";
-import { AcpSessionManager, type AcpResourceHandlers } from "./manager.js";
+import { type AcpResourceHandlers, AcpSessionManager } from "./manager.js";
 
 function fakeProviderScript(): string {
   return [

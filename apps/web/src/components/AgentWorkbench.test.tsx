@@ -1,5 +1,5 @@
-import { vi, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   if (!globalThis.localStorage) {
@@ -17,8 +17,8 @@ vi.hoisted(() => {
 vi.mock("./TerminalPanel", () => ({ TerminalView: () => null }));
 
 import type { AcpActivity, AcpSession, TerminalSession } from "@ainide/shared";
-import { useAppStore } from "../store";
 import { ACP_SEND_LABEL } from "../acp-composer";
+import { useAppStore } from "../store";
 import { ActivityView, AgentWorkbench, combinedAgentEntries } from "./AgentWorkbench";
 
 const capabilities = { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true };
@@ -53,7 +53,7 @@ describe("AgentWorkbench", () => {
     ];
     useAppStore.setState({ activeProjectId: "/project", acpSessions: [acp], focusedSessionId: acp.id, pinnedSessionId: undefined, acpHistory: { [acp.id]: history } });
 
-    const markup = renderToStaticMarkup(<>{history.map((activity, index) => <ActivityView activity={activity} onOpenReference={() => undefined} key={index} />)}</>);
+    const markup = renderToStaticMarkup(<>{history.map((activity) => <ActivityView activity={activity} onOpenReference={() => undefined} key={JSON.stringify(activity)} />)}</>);
 
     expect(markup).toContain('class="acp-message user"');
     expect(markup).toContain('class="acp-message agent"');
@@ -81,7 +81,7 @@ describe("AgentWorkbench", () => {
     ];
     useAppStore.setState({ activeProjectId: "/project", acpSessions: [acp], focusedSessionId: acp.id, pinnedSessionId: undefined, acpHistory: { [acp.id]: history } });
 
-    const markup = renderToStaticMarkup(<>{history.map((activity, index) => <ActivityView activity={activity} onOpenReference={() => undefined} key={index} />)}</>);
+    const markup = renderToStaticMarkup(<>{history.map((activity) => <ActivityView activity={activity} onOpenReference={() => undefined} key={JSON.stringify(activity)} />)}</>);
 
     expect(markup).toContain('class="acp-plan"');
     expect(markup).toContain('class="acp-tool completed"');

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { DEFAULT_BACKEND_PORT, resolveBackendPort } from "@ainide/shared";
+import { describe, expect, it } from "vitest";
 
 describe("backend port resolution", () => {
   it("uses the uncommon default when PORT is unset", () => {

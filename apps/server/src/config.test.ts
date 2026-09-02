@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig, parseBuildCommands, parseAcpAgents, parseProjects, saveConfig, type AinideConfig } from "./config.js";
+import { type AinideConfig, loadConfig, parseAcpAgents, parseBuildCommands, parseProjects, saveConfig } from "./config.js";
 
 const originalConfig = process.env.AINIDE_CONFIG;
 const originalAgentCommand = process.env.AGENT_COMMAND;

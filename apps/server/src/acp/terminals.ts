@@ -1,6 +1,6 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import * as acp from "@agentclientprotocol/sdk";
+import type * as acp from "@agentclientprotocol/sdk";
 import type { AcpSession } from "@ainide/shared";
 import { resolveAcpDirectory } from "./paths.js";
 

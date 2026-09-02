@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
 import type { TerminalSession } from "@ainide/shared";
+import { useEffect, useState } from "react";
 import { closeTerminal, createTerminal } from "../api";
-import { lazygitTerminals, selectLazygitSession } from "../terminal-ownership";
 import { useAppStore } from "../store";
+import { lazygitTerminals, selectLazygitSession } from "../terminal-ownership";
 import { TerminalView } from "./TerminalPanel";
 
 interface LazyGitSurfaceProps {
@@ -50,7 +50,7 @@ export function LazyGitSurface({ onOpenReference }: LazyGitSurfaceProps) {
         <span className="eyebrow">LAZYGIT</span>
         <h2>{terminalError ? "Lazygit is unavailable" : "No Lazygit session yet"}</h2>
         <p>{terminalError ?? "Start Lazygit to work with Git interactively in this project."}</p>
-        <button className="primary-button" onClick={() => void restart()}>{terminalError ? "Retry Lazygit" : "Start Lazygit"}</button>
+        <button type="button" className="primary-button" onClick={() => void restart()}>{terminalError ? "Retry Lazygit" : "Start Lazygit"}</button>
       </div>
     </section>;
   }
@@ -59,12 +59,12 @@ export function LazyGitSurface({ onOpenReference }: LazyGitSurfaceProps) {
     <header className="lazygit-header">
       <div className="lazygit-tabs">
         <span className="eyebrow">LAZYGIT</span>
-        {sessions.length > 1 && sessions.map((session) => <button key={session.id} className={session.id === selected?.id ? "active" : ""} onClick={() => setSelectedId(session.id)}>{session.title || "Lazygit"}<i className={session.alive ? "alive" : "dead"} /></button>)}
+        {sessions.length > 1 && sessions.map((session) => <button type="button" key={session.id} className={session.id === selected?.id ? "active" : ""} onClick={() => setSelectedId(session.id)}>{session.title || "Lazygit"}<i className={session.alive ? "alive" : "dead"} /></button>)}
         {sessions.length === 1 && selected && <strong>{selected.title || "Lazygit"}</strong>}
       </div>
       <div className="lazygit-controls">
-        {!selected?.alive && <button className="primary-button compact" onClick={() => void restart()}>Restart Lazygit</button>}
-        {selected && <button onClick={() => void close(selected)} title="Close session">×</button>}
+        {!selected?.alive && <button type="button" className="primary-button compact" onClick={() => void restart()}>Restart Lazygit</button>}
+        {selected && <button type="button" onClick={() => void close(selected)} title="Close session">×</button>}
       </div>
     </header>
     {!selected?.alive && <div className="lazygit-status-banner"><b>Lazygit exited</b><span>{terminalError ?? "The process stopped. Restart Lazygit or close this session."}</span></div>}

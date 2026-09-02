@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptyProjectBag, snapshotFromBag } from "./project-ui";
 import { persistTerminalCollapsed, readTerminalCollapsedPreference, shouldShowReferenceDock, terminalPanelVisible } from "./layout-prefs";
+import { emptyProjectBag, snapshotFromBag } from "./project-ui";
 
 describe("layout preferences", () => {
   it("defaults the terminal panel to collapsed when no preference exists", () => {

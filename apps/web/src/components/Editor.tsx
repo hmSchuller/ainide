@@ -1,14 +1,13 @@
-import { useEffect, useRef, useState, type DragEvent } from "react";
 import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
-import type { EditorTab, EditorPaneId, EditorPaneState, GitComparisonState } from "../types";
-import { gitComparisonKey, isDirty, useAppStore } from "../store";
-import type { CodeSelection } from "../references";
-import { configureMonacoLanguageSurface } from "../monaco-language-surface";
+import { type DragEvent, useEffect, useRef, useState } from "react";
 import { language } from "../file-language";
 import { diffLines } from "../line-diff";
+import { configureMonacoLanguageSurface } from "../monaco-language-surface";
+import type { CodeSelection } from "../references";
+import { gitComparisonKey, isDirty, useAppStore } from "../store";
+import type { EditorPaneId, EditorPaneState, EditorTab, GitComparisonState } from "../types";
 
 interface EditorProps {
-  onSave: (tab: EditorTab) => void;
   onContentChange: (path: string, content: string) => void;
   flushAutoSave: (path: string) => Promise<void>;
   cancelAutoSave: (path: string) => void;
@@ -59,7 +58,7 @@ function GitDiffView({ paneId, tab, comparison, onClose }: GitDiffViewProps) {
   return <div className="git-diff-view">
     <div className="git-diff-header">
       <div className="git-diff-heading"><span className="eyebrow">FILE COMPARISON</span><strong>{tab.path}</strong></div>
-      <button className="split-control" onClick={onClose}>Close Git diff</button>
+      <button type="button" className="split-control" onClick={onClose}>Close Git diff</button>
     </div>
     {clean ? <div className="git-diff-clean"><span className="state-icon">✓</span><h2>No file changes</h2><p>The current buffer matches the committed HEAD baseline.</p></div> : <>
       <div className="git-diff-labels"><span><b>HEAD</b>{comparison.comparison.previousPath && <small>{comparison.comparison.previousPath}</small>}</span><span><b>{currentLabel}</b><small>{tab.path}</small></span></div>
@@ -98,7 +97,6 @@ interface EditorPaneProps {
   pane: EditorPaneState;
   tabs: EditorTab[];
   secondaryOpen: boolean;
-  onSave: (tab: EditorTab) => void;
   onContentChange: (path: string, content: string) => void;
   flushAutoSave: (path: string) => Promise<void>;
   cancelAutoSave: (path: string) => void;
@@ -108,7 +106,7 @@ interface EditorPaneProps {
   onAddFileToKit: (tab: EditorTab) => void;
 }
 
-function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit }: EditorPaneProps) {
+function EditorPane({ paneId, pane, tabs, secondaryOpen, onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit }: EditorPaneProps) {
   const active = tabs.find((tab) => tab.path === pane.activePath);
   const focusedPaneId = useAppStore((state) => state.focusedPaneId);
   const updateTab = useAppStore((state) => state.updateTab);
@@ -300,38 +298,42 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
       <div className="pane-tab-row">
         <div className={`tabs ${dropIndex === tabs.length && draggingPath ? "drop-end" : ""}`} role="tablist" aria-label={`${paneId === "primary" ? "Primary" : "Secondary"} editor tabs`} onDragOver={dragOverTabs} onDrop={(event) => dropTab(event)}>
           {tabs.map((tab, index) => (
+            /* Tab drag is a pointer-only convenience; tabs reachable via keyboard */
+            /* biome-ignore lint/a11y/noStaticElementInteractions: drag handles are supplementary pointer affordances */
             <div className={`editor-tab ${tab.path === pane.activePath ? "active" : ""} ${draggingPath === tab.path ? "dragging" : ""} ${dropIndex === index && draggingPath ? "drop-before" : ""}`} data-tab-index={index} key={tab.path} draggable onDragStart={(event) => startDrag(event, tab.path)} onDragEnd={clearDrag}>
-              <button role="tab" aria-selected={tab.path === pane.activePath} onClick={(event) => {
+              <button type="button" role="tab" aria-selected={tab.path === pane.activePath} onClick={(event) => {
                 focusPane();
                 if (event.shiftKey) { void close(tab.path); return; }
                 setActivePath(paneId, tab.path);
               }} title={`${tab.path} · Shift-click to close`}>
                 <span className="tab-language">{tab.language === "plaintext" ? "·" : "◆"}</span>{tab.name}{isDirty(tab) && <span className="dirty-dot" />}
               </button>
-              <button className="tab-close" onClick={() => void close(tab.path)} aria-label={`Close ${tab.name}`}>×</button>
+              <button type="button" className="tab-close" onClick={() => void close(tab.path)} aria-label={`Close ${tab.name}`}>×</button>
             </div>
           ))}
           {tabs.length > 0 && <div className="tab-spacer" />}
         </div>
-        {paneId === "secondary" && <button className="split-control" onClick={closeSecondary} title="Close split">Close split</button>}
-        {paneId === "primary" && !secondaryOpen && <button className="split-control" onClick={() => useAppStore.getState().openSecondary()} title="Open split">Split</button>}
+        {paneId === "secondary" && <button type="button" className="split-control" onClick={closeSecondary} title="Close split">Close split</button>}
+        {paneId === "primary" && !secondaryOpen && <button type="button" className="split-control" onClick={() => useAppStore.getState().openSecondary()} title="Open split">Split</button>}
       </div>
       {active ? (
+        /* Drop-zone drag is a pointer-only convenience; files open via explorer/quick-open */
+        /* biome-ignore lint/a11y/noStaticElementInteractions: drop target is a supplementary pointer affordance */
         <div className="editor-content" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropIndex(tabs.length); }} onDrop={(event) => dropTab(event)}>
           {active.conflict && (
             <div className="conflict-banner">
               <span><b>External change</b> · {active.name} changed on disk while you were editing.</span>
               <span className="conflict-actions">
-                <button onClick={() => updateTab(active.path, { content: active.conflict?.externalContent ?? active.content, savedContent: active.conflict?.externalContent ?? active.content, conflict: undefined })}>Reload</button>
-                <button onClick={() => updateTab(active.path, { conflict: undefined })}>Keep mine</button>
-                <button onClick={() => setCompare(!compare)}>{compare ? "Close compare" : "Compare"}</button>
+                <button type="button" onClick={() => updateTab(active.path, { content: active.conflict?.externalContent ?? active.content, savedContent: active.conflict?.externalContent ?? active.content, conflict: undefined })}>Reload</button>
+                <button type="button" onClick={() => updateTab(active.path, { conflict: undefined })}>Keep mine</button>
+                <button type="button" onClick={() => setCompare(!compare)}>{compare ? "Close compare" : "Compare"}</button>
               </span>
             </div>
           )}
-          {gitDiffOpen && canOpenGitDiff && readyComparison ? <GitDiffView paneId={paneId} tab={active} comparison={readyComparison} onClose={() => setGitDiffOpen(false)} /> : active.error ? <div className="file-state"><span className="state-icon">!</span><h2>Could not open file</h2><p>{active.error}</p>{canOpenGitDiff && <button className="primary-button" onClick={() => setGitDiffOpen(true)}>View Git diff</button>}</div> : active.binary ? <div className="file-state"><span className="state-icon">◈</span><h2>Binary file</h2><p>ainide does not edit binary files.</p></div> : (
+          {gitDiffOpen && canOpenGitDiff && readyComparison ? <GitDiffView paneId={paneId} tab={active} comparison={readyComparison} onClose={() => setGitDiffOpen(false)} /> : active.error ? <div className="file-state"><span className="state-icon">!</span><h2>Could not open file</h2><p>{active.error}</p>{canOpenGitDiff && <button type="button" className="primary-button" onClick={() => setGitDiffOpen(true)}>View Git diff</button>}</div> : active.binary ? <div className="file-state"><span className="state-icon">◈</span><h2>Binary file</h2><p>ainide does not edit binary files.</p></div> : (
             <>
-              <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions">{gitStatusText && <span className={`git-comparison-status ${gitComparison?.status === "unavailable" ? "unavailable" : ""}`}>{gitStatusText}</span>}{canOpenGitDiff && <button onClick={() => setGitDiffOpen(true)}>Git diff</button>}<button onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button></span></div>
-              {compare && active.conflict?.externalContent !== undefined && <div className="compare-panel"><div><label>YOUR BUFFER</label><pre>{active.content}</pre></div><div><label>ON DISK</label><pre>{active.conflict.externalContent}</pre></div></div>}
+              <div className="editor-toolbar"><span>{active.path}</span><span className="editor-actions">{gitStatusText && <span className={`git-comparison-status ${gitComparison?.status === "unavailable" ? "unavailable" : ""}`}>{gitStatusText}</span>}{canOpenGitDiff && <button type="button" onClick={() => setGitDiffOpen(true)}>Git diff</button>}<button type="button" onClick={() => editorRef.current?.trigger("keyboard", "actions.find", null)}>Find</button><button type="button" onClick={() => editorRef.current?.trigger("keyboard", "editor.action.gotoLine", null)}>Go to line</button></span></div>
+              {compare && active.conflict?.externalContent !== undefined && <div className="compare-panel"><div><span className="compare-label">YOUR BUFFER</span><pre>{active.content}</pre></div><div><span className="compare-label">ON DISK</span><pre>{active.conflict.externalContent}</pre></div></div>}
               <Editor key={active.path} path={active.path} theme="vs-dark" language={active.language} value={active.content} saveViewState beforeMount={configureMonacoLanguageSurface} onMount={mount} onChange={(value) => onContentChange(active.path, value ?? "")} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", glyphMargin: true, padding: { top: 10 }, scrollBeyondLastLine: false, renderWhitespace: "selection", smoothScrolling: true }} />
             </>
           )}
@@ -341,12 +343,12 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onSave, onContentChange
   );
 }
 
-export function EditorSurface({ onSave, onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit }: EditorProps) {
+export function EditorSurface({ onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit }: EditorProps) {
   const tabs = useAppStore((state) => state.tabs);
   const panes = useAppStore((state) => state.panes);
   const secondaryOpen = useAppStore((state) => state.secondaryOpen);
   const paneIds: EditorPaneId[] = secondaryOpen ? ["primary", "secondary"] : ["primary"];
-  const paneProps = { onSave, onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit, secondaryOpen };
+  const paneProps = { onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit, secondaryOpen };
 
   return <section className={`editor-area ${secondaryOpen ? "split" : ""}`}>
     <div className="editor-layout">

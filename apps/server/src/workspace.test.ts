@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorkspaceManager } from "./workspace.js";
 import { UnsafePathError } from "./path-resolver.js";
+import { WorkspaceManager } from "./workspace.js";
 
 describe("WorkspaceManager file mutations", () => {
   const managers: WorkspaceManager[] = [];

@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";

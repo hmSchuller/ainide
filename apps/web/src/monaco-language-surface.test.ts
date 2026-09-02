@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import type { Monaco } from "@monaco-editor/react";
+import { describe, expect, it, vi } from "vitest";
 import { configureMonacoLanguageSurface } from "./monaco-language-surface";
 
 interface DefaultsSpy {

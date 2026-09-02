@@ -11,10 +11,10 @@ vi.hoisted(() => {
   });
 });
 
-import { renderToStaticMarkup } from "react-dom/server";
 import type { TerminalSession } from "@ainide/shared";
+import { renderToStaticMarkup } from "react-dom/server";
 import { useAppStore } from "../store";
-import { findLiveBuild, resolveSelectedBuild, BuildRunner } from "./BuildRunner";
+import { BuildRunner, findLiveBuild, resolveSelectedBuild } from "./BuildRunner";
 
 beforeEach(() => {
   vi.unstubAllGlobals();

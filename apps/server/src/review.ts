@@ -121,11 +121,9 @@ export class ReviewManager {
     const child = (this.launchOptions.spawn ?? spawn)(difit, args, { cwd, env: withToolsPath(process.env), stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     this.scope = selectedScope;
-    let exitCode: number | null = null;
     let exited = false;
     child.once("exit", (code) => {
       exited = true;
-      exitCode = code;
       if (this.child === child) this.setStopped(`difit exited${code === null ? "" : ` with code ${code}`}`);
     });
     this.status = { running: true, available: true, pid: child.pid };

@@ -347,7 +347,7 @@ export function websocketUrl(endpoint: string, token: string, params: Record<str
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const url = new URL(endpoint, `${protocol}//${window.location.host}`);
   url.searchParams.set("token", token);
-  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  Object.entries(params).forEach(([key, value]) => { url.searchParams.set(key, value); });
   return url.toString();
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PRIMARY_MODE_LABELS, PRIMARY_MODES, modeUsesNumericShortcut } from "./navigation";
+import { modeUsesNumericShortcut, PRIMARY_MODE_LABELS, PRIMARY_MODES } from "./navigation";
 
 describe("primary navigation", () => {
   it("presents modes in Edit, Review, Agents, and LazyGit order", () => {

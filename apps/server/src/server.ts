@@ -1,22 +1,22 @@
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
-import fastifyStatic from "@fastify/static";
-import websocket from "@fastify/websocket";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { parseAcpSessionDescriptors, parseAgentSessionDescriptors, type AcpPromptContext, type AcpPromptRequest, type ProjectSessionSnapshot, type SessionBootstrap, type WorkspaceEvent } from "@ainide/shared";
+import { type AcpPromptContext, type AcpPromptRequest, type ProjectSessionSnapshot, parseAcpSessionDescriptors, parseAgentSessionDescriptors, type SessionBootstrap, type WorkspaceEvent } from "@ainide/shared";
+import fastifyStatic from "@fastify/static";
+import websocket from "@fastify/websocket";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
-import { ReviewManager } from "./review.js";
-import { TerminalError, TerminalManager } from "./terminals.js";
-import { ProjectRegistry } from "./projects.js";
-import { listDirectoryChildren } from "./directory-picker.js";
-import { loadConfig, parseBuildCommands, saveConfig } from "./config.js";
-import { loadSessionSnapshot, saveSessionSnapshot } from "./sessions.js";
-import { WorkspaceManager } from "./workspace.js";
 import { createAcpResourceHandlers } from "./acp/bridges.js";
-import { AcpSessionError, AcpSessionManager, type AcpRequestResponse } from "./acp/manager.js";
+import { type AcpRequestResponse, AcpSessionError, AcpSessionManager } from "./acp/manager.js";
 import { AcpTerminalManager } from "./acp/terminals.js";
+import { loadConfig, parseBuildCommands, saveConfig } from "./config.js";
+import { listDirectoryChildren } from "./directory-picker.js";
+import { ProjectRegistry } from "./projects.js";
+import { ReviewManager } from "./review.js";
+import { loadSessionSnapshot, saveSessionSnapshot } from "./sessions.js";
+import { TerminalError, TerminalManager } from "./terminals.js";
 import { resolveLocalVersion } from "./version.js";
+import { WorkspaceManager } from "./workspace.js";
 
 export interface CreateServerOptions {
   update?: { current?: string; latest?: string; notesUrl?: string };
@@ -383,7 +383,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<A
       return { ok: true };
     } catch (error) { errorReply(reply, error); }
   });
-  app.get("/api/git/status", async (request, reply) => {
+  app.get("/api/git/status", async (_request, reply) => {
     try { return await projects.requireActive().refreshGit(false); } catch (error) { errorReply(reply, error); }
   });
   app.get("/api/git/compare", async (request, reply) => {
@@ -581,7 +581,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<A
 
   const close = async () => {
     await persistNow();
-    eventClients.forEach((client) => client.close());
+    eventClients.forEach((client) => { client.close(); });
     for (const [client] of acpEventClients) client.close();
     await acp.close();
     await acpTerminals.close();

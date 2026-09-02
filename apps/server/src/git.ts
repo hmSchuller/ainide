@@ -113,7 +113,7 @@ export async function getGitStatus(root: string): Promise<GitStatus> {
  * operations only and never accepts an arbitrary revision or command.
  */
 export async function getGitFileComparison(root: string, relativePath: string): Promise<GitFileComparison> {
-  let isRepository = true;
+  const isRepository = true;
   try {
     await git(root, ["rev-parse", "--git-dir"]);
   } catch {

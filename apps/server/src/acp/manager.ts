@@ -1,29 +1,26 @@
 import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
-import { parseAcpProviderPreferences } from "@ainide/shared";
 import type {
   AcpActivity,
   AcpAuthMethod,
   AcpConfigOption,
-  AcpProviderPreference,
-  AcpProviderPreferenceValue,
-  AcpElicitationRequest,
   AcpPendingRequest,
   AcpPromptRequest,
   AcpProviderDescriptor,
+  AcpProviderPreference,
+  AcpProviderPreferenceValue,
   AcpServerEvent,
   AcpSession,
   AcpSessionCapabilities,
   AcpSessionDescriptor,
   AcpSessionEvent,
-  AcpSessionStatus,
   AcpTitleSource,
-  JsonValue,
 } from "@ainide/shared";
+import { parseAcpProviderPreferences } from "@ainide/shared";
 import type { AcpAgentConfig, AinideConfig } from "../config.js";
-import { normalizeConfigOptions, normalizeElicitationRequest, normalizePermissionRequest, normalizeSessionUpdate, appendAcpActivity, AcpEventLog, stabilizeCursorMessageChunk } from "./normalize.js";
+import { AcpEventLog, appendAcpActivity, normalizeConfigOptions, normalizeElicitationRequest, normalizePermissionRequest, normalizeSessionUpdate, stabilizeCursorMessageChunk } from "./normalize.js";
 import { AcpProtocolAdapter, type AcpProtocolCallbacks } from "./protocol.js";
-import { openAcpTransport, type AcpProcessExit, type AcpTransport } from "./transport.js";
+import { type AcpProcessExit, type AcpTransport, openAcpTransport } from "./transport.js";
 
 export type AcpPermissionResponse =
   | { outcome: "selected"; optionId: string }

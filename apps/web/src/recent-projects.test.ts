@@ -1,6 +1,6 @@
+import type { ProjectRef } from "@ainide/shared";
 import { describe, expect, it } from "vitest";
 import { deduplicateRecentProjects, projectRefFromMutation, readRecentProjects, rememberRecentProject, writeRecentProjects } from "./recent-projects";
-import type { ProjectRef } from "@ainide/shared";
 
 function profileStorage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial));

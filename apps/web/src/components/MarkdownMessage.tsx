@@ -4,6 +4,8 @@ import remarkGfm from "remark-gfm";
 
 const SAFE_SCHEMES = new Set(["http", "https", "mailto"]);
 const EXTERNAL_SCHEME = /^(?:https?):/i;
+// Sanitization by design: strip control characters before scheme validation.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: deliberate control-character stripping
 const URL_CONTROL_CHARACTERS = /[\u0000-\u0020\u007f-\u009f]/g;
 
 export function safeMarkdownUrl(value: string | undefined): string | undefined {

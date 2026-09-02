@@ -1,6 +1,6 @@
 import type { AcpActivity, AcpSession, GitStatus, ProjectSessionSnapshot, RecentChange, TerminalSession, Workspace, WorkspaceEvent } from "@ainide/shared";
-import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, ReviewState } from "./types";
 import type { ReferenceItem } from "./references";
+import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, ReviewState } from "./types";
 
 export interface ProjectUiBag {
   mode: AppMode;

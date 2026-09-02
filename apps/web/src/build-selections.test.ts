@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { persistBuildSelection, readBuildSelections, resolveBuildSelection, BUILD_SELECTIONS_KEY } from "./build-selections";
+import { BUILD_SELECTIONS_KEY, persistBuildSelection, readBuildSelections, resolveBuildSelection } from "./build-selections";
 
 function memoryStorage(): { values: Map<string, string>; getItem: (key: string) => string | null; setItem: (key: string, value: string) => void } {
   const values = new Map<string, string>();

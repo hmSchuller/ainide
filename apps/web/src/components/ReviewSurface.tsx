@@ -11,7 +11,7 @@ export function ReviewSurface({ scope, onScopeChange, onStart }: ReviewSurfacePr
   const review = useAppStore((state) => state.review);
   const git = useAppStore((state) => state.git);
   return <section className="review-surface">
-    <header className="review-header"><div><p className="eyebrow">REVIEW CHANGES</p><strong>{git?.summary.filesChanged ?? 0} files changed</strong></div><div className="review-controls"><label htmlFor="review-scope">Scope</label><select id="review-scope" value={scope} onChange={(event) => onScopeChange(event.target.value as ReviewScope)}><option value="working-tree">Working tree</option><option value="staged">Staged</option><option value="last-commit">Last commit</option><option value="branch-vs-main">Branch vs main</option></select><button onClick={onStart}>Restart review</button></div></header>
+    <header className="review-header"><div><p className="eyebrow">REVIEW CHANGES</p><strong>{git?.summary.filesChanged ?? 0} files changed</strong></div><div className="review-controls"><label htmlFor="review-scope">Scope</label><select id="review-scope" value={scope} onChange={(event) => onScopeChange(event.target.value as ReviewScope)}><option value="working-tree">Working tree</option><option value="staged">Staged</option><option value="last-commit">Last commit</option><option value="branch-vs-main">Branch vs main</option></select><button type="button" onClick={onStart}>Restart review</button></div></header>
     {review.url ? <iframe title="Difit review" src={review.url} /> : <div className="review-empty">
       <div className="review-icon">◒</div>
       <p className="eyebrow">REVIEW SURFACE</p>

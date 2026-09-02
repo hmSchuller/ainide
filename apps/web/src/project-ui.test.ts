@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { EditorTab } from "./types";
-import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, snapshotFromBag } from "./project-ui";
 import { diffLines } from "./line-diff";
+import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, snapshotFromBag } from "./project-ui";
+import type { EditorTab } from "./types";
 
 function tab(overrides: Partial<EditorTab> = {}): EditorTab {
   return { path: "src/a.ts", name: "a.ts", content: "clean", savedContent: "clean", language: "typescript", ...overrides };

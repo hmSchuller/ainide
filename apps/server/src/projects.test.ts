@@ -1,10 +1,10 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
 import type { WorkspaceEvent } from "@ainide/shared";
-import { ProjectRegistry } from "./projects.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { UnsafePathError } from "./path-resolver.js";
+import { ProjectRegistry } from "./projects.js";
 
 async function tempProject(prefix: string): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), prefix));

@@ -30,6 +30,7 @@ Run from the repository root:
 ```sh
 npm install
 npm run dev
+npm run lint
 npm run typecheck
 npm test
 npm run build

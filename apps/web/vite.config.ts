@@ -1,6 +1,6 @@
-import { defineConfig, loadEnv } from "vite";
-import react from "@vitejs/plugin-react";
 import { resolveBackendPort } from "@ainide/shared";
+import react from "@vitejs/plugin-react";
+import { defineConfig, loadEnv } from "vite";
 
 export function createViteConfig(portValue?: string) {
   const backendPort = resolveBackendPort(portValue);

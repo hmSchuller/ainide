@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { createServer, type AinideServer } from "../server.js";
+import { type AinideServer, createServer } from "../server.js";
 
 const servers: AinideServer[] = [];
 const environments: Array<{ sessions?: string; config?: string }> = [];

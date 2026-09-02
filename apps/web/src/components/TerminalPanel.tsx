@@ -1,11 +1,11 @@
 import "@xterm/xterm/css/xterm.css";
-import { useEffect, useRef, useState } from "react";
+import type { TerminalSession } from "@ainide/shared";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import type { TerminalSession } from "@ainide/shared";
+import { useEffect, useRef, useState } from "react";
 import { closeTerminal, renameTerminal, websocketUrl } from "../api";
-import { utilityTerminals } from "../terminal-ownership";
 import { persistLayout, useAppStore } from "../store";
+import { utilityTerminals } from "../terminal-ownership";
 
 interface TerminalPanelProps {
   onNewTerminal: (kind?: TerminalSession["kind"]) => void;
@@ -21,6 +21,10 @@ export function TerminalView({ session, onOpenReference }: { session: TerminalSe
   const [connection, setConnection] = useState<"connecting" | "connected" | "closed">("connecting");
   const [error, setError] = useState<string>();
   const updateTerminal = useAppStore((state) => state.updateTerminal);
+  const workspaceRef = useRef(workspace);
+  const onOpenReferenceRef = useRef(onOpenReference);
+  workspaceRef.current = workspace;
+  onOpenReferenceRef.current = onOpenReference;
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -70,9 +74,9 @@ export function TerminalView({ session, onOpenReference }: { session: TerminalSe
         const text = terminal.buffer.active.getLine(lineNumber - 1)?.translateToString() ?? "";
         const links: { range: { start: { x: number; y: number }; end: { x: number; y: number } }; text: string; activate: () => void }[] = [];
         const pattern = /(?:^|[\s("'])((?:\.\.?[\\/])?[\w./\\-]+):(\d+)(?::(\d+))?/g;
-        let match: RegExpExecArray | null;
-        while ((match = pattern.exec(text))) {
-          const value = match[1] + ":" + match[2] + (match[3] ? `:${match[3]}` : "");
+        let match: RegExpExecArray | null = pattern.exec(text);
+        while (match !== null) {
+          const value = `${match[1]}:${match[2]}${match[3] ? `:${match[3]}` : ""}`;
           const start = (match.index ?? 0) + (match[0].length - value.length) + 1;
           const file = match[1];
           const line = Number(match[2]);
@@ -81,13 +85,15 @@ export function TerminalView({ session, onOpenReference }: { session: TerminalSe
             range: { start: { x: start, y: lineNumber }, end: { x: start + value.length - 1, y: lineNumber } },
             text: value,
             activate: () => {
-              if (!file || !workspace) return;
+              const currentWorkspace = workspaceRef.current;
+              if (!file || !currentWorkspace) return;
               const normalizedFile = file.replaceAll("\\", "/");
-              const root = workspace.rootPath.replaceAll("\\", "/").replace(/\/$/, "");
+              const root = currentWorkspace.rootPath.replaceAll("\\", "/").replace(/\/$/, "");
               const relativeFile = normalizedFile.startsWith(`${root}/`) ? normalizedFile.slice(root.length + 1) : normalizedFile.replace(/^\.\//, "");
-              onOpenReference(relativeFile, line, column);
+              onOpenReferenceRef.current(relativeFile, line, column);
             },
           });
+          match = pattern.exec(text);
         }
         callback(links);
       },
@@ -106,7 +112,7 @@ export function TerminalView({ session, onOpenReference }: { session: TerminalSe
       terminal.dispose();
       socketRef.current = null;
     };
-  }, [session.id, session.kind, token, updateTerminal]);
+  }, [session.id, token, updateTerminal]);
 
   return <div className="terminal-view">
     <div className="terminal-connection">{error ?? (connection === "connected" ? "connected" : "connecting")}</div>
@@ -153,20 +159,20 @@ export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelP
     <header className="terminal-header">
       <div className="terminal-tabs">
         <span className="eyebrow">TERMINAL</span>
-        {terminals.map((terminal) => <button key={terminal.id} className={terminal.id === activeTerminalId ? "active" : ""} onClick={() => setActiveTerminal(terminal.id)} onDoubleClick={() => {
+        {terminals.map((terminal) => <button type="button" key={terminal.id} className={terminal.id === activeTerminalId ? "active" : ""} onClick={() => setActiveTerminal(terminal.id)} onDoubleClick={() => {
           const nextTitle = window.prompt("Rename terminal", terminal.title);
           if (!nextTitle || !token) return;
           void renameTerminal(terminal.id, nextTitle, token).then((updated) => updateTerminal(terminal.id, updated)).catch(() => undefined);
         }}>{terminal.title || terminal.kind}<i className={terminal.alive ? "alive" : "dead"} /></button>)}
-        <button className="new-terminal" onClick={() => onNewTerminal()} title="New shell">+</button>
+        <button type="button" className="new-terminal" onClick={() => onNewTerminal()} title="New shell">+</button>
       </div>
       <div className="terminal-controls">
-        <button onClick={() => setTerminalMaximized(!maximized)} title="Maximize terminal">{maximized ? "⤢" : "⤡"}</button>
-        <button onClick={() => { const next = !collapsed; if (maximized) setTerminalMaximized(false); setTerminalCollapsed(next); }} title="Collapse terminal">{collapsed ? "⌃" : "⌄"}</button>
+        <button type="button" onClick={() => setTerminalMaximized(!maximized)} title="Maximize terminal">{maximized ? "⤢" : "⤡"}</button>
+        <button type="button" onClick={() => { const next = !collapsed; if (maximized) setTerminalMaximized(false); setTerminalCollapsed(next); }} title="Collapse terminal">{collapsed ? "⌃" : "⌄"}</button>
       </div>
     </header>
     <div className={`terminal-body ${collapsed ? "collapsed-hidden" : ""}`}>
-       {terminals.length === 0 ? <div className="terminal-empty">No utility terminals. Use <button onClick={() => onNewTerminal("shell")}>+ Shell</button> to start one.</div> : terminals.map((terminal) => <div className={`terminal-instance ${terminal.id === selectedTerminalId ? "visible" : "hidden"}`} key={terminal.id}><TerminalView session={terminal} onOpenReference={onOpenReference} /><button className="terminal-close" onClick={() => void close(terminal)} title="Close terminal">×</button></div>)}
+       {terminals.length === 0 ? <div className="terminal-empty">No utility terminals. Use <button type="button" onClick={() => onNewTerminal("shell")}>+ Shell</button> to start one.</div> : terminals.map((terminal) => <div className={`terminal-instance ${terminal.id === selectedTerminalId ? "visible" : "hidden"}`} key={terminal.id}><TerminalView session={terminal} onOpenReference={onOpenReference} /><button type="button" className="terminal-close" onClick={() => void close(terminal)} title="Close terminal">×</button></div>)}
     </div>
   </section>;
 }

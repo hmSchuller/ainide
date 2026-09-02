@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
 import type { FileEntry, GitFileStatusKind } from "@ainide/shared";
+import { useEffect, useState } from "react";
 import { ApiError, listFiles } from "../api";
 import { explorerMenuItemsForEntry } from "../explorer-actions";
 import { useAppStore } from "../store";
@@ -73,6 +73,9 @@ export function Explorer({
     }
   };
 
+  // Reloads expanded directories on workspace/join changes; `load` reads the
+  // live store itself and identity churn must not re-trigger listing.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run on expanded/workspace/token, not on load identity
   useEffect(() => {
     if (!workspace || !token) return;
     const { directories: cached, expanded: open } = useAppStore.getState();
@@ -80,7 +83,6 @@ export function Explorer({
     for (const [path, isOpen] of Object.entries(open)) {
       if (isOpen && !cached[path]) void load(path);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, workspace?.rootPath, token]);
 
   const statusFor = (path: string): GitFileStatusKind | undefined => {
@@ -109,7 +111,7 @@ export function Explorer({
           const changedAt = recentChanges[entry.path];
           return (
             <div key={entry.path}>
-              <button
+              <button type="button"
                 className={`tree-row ${selectedPath === entry.path ? "selected" : ""}`}
                 style={{ paddingLeft: `${depth * 14 + 12}px` }}
                 onClick={(event) => {
@@ -145,7 +147,7 @@ export function Explorer({
           <span className="eyebrow">WORKSPACE</span>
           <strong title={workspace.rootPath}>{workspace.name || basename(workspace.rootPath)}</strong>
         </div>
-        <button className="icon-button" onClick={onRefresh} title="Refresh files and Git">↻</button>
+        <button type="button" className="icon-button" onClick={onRefresh} title="Refresh files and Git">↻</button>
       </header>
       <div className="tree-root">{renderEntries("", 0)}</div>
       <footer className="explorer-footer"><span className="status-pip" /> {git?.isRepository ? `${git.branch ?? "detached"} · ${git.summary.filesChanged} changed` : "Not a Git repository"}</footer>

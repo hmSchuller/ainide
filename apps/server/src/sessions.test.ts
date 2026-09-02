@@ -1,8 +1,8 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { type ProjectSessionSnapshot, parseAppMode } from "@ainide/shared";
 import { describe, expect, it } from "vitest";
-import { parseAppMode, type ProjectSessionSnapshot } from "@ainide/shared";
 import { emptyProjectSnapshot } from "./projects.js";
 import { loadSessionSnapshot, parseSessionSnapshot, sanitizeSnapshot, saveSessionSnapshot } from "./sessions.js";
 

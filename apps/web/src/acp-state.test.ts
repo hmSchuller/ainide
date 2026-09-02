@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import type { AcpServerEvent, AcpSession } from "@ainide/shared";
+import { describe, expect, it } from "vitest";
 import { applyAcpServerEvent, emptyAcpClientState } from "./acp-state";
 
 function session(id = "session-1"): AcpSession {

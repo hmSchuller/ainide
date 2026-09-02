@@ -10,10 +10,12 @@
   "scripts": {
     "dev": "npm run build -w @ainide/shared && PORT=${PORT:-43127} concurrently -k \"npm run dev -w @ainide/server\" \"sh -c 'until nc -z 127.0.0.1 \\$PORT >/dev/null 2>&1; do sleep 0.1; done; npm run dev -w @ainide/web'\"",
     "build": "npm run build -w @ainide/shared && npm run build -w @ainide/server && npm run build -w @ainide/web",
+    "lint": "biome check .",
     "test": "npm run build -w @ainide/shared && npm run test -w @ainide/server && npm run test -w @ainide/web",
     "typecheck": "npm run build -w @ainide/shared && npm run typecheck -w @ainide/server && npm run typecheck -w @ainide/web"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.11",
     "concurrently": "^9.1.2",
     "typescript": "^5.7.2"
   }

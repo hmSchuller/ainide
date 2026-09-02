@@ -1,5 +1,5 @@
-import { useState } from "react";
 import type { BuildCommand, TerminalSession } from "@ainide/shared";
+import { useState } from "react";
 import { closeTerminal, createTerminal } from "../api";
 import { resolveBuildSelection } from "../build-selections";
 import { useAppStore } from "../store";

@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import type { AcpSession } from "@ainide/shared";
+import { describe, expect, it } from "vitest";
 import { ProjectRegistry } from "../projects.js";
 import { createAcpResourceHandlers } from "./bridges.js";
 import { AcpTerminalManager } from "./terminals.js";

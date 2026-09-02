@@ -1,12 +1,12 @@
-import { create } from "zustand";
 import type { AcpActivity, AcpServerEvent, AcpSession, BuildCommand, FileEntry, GitFileComparison, GitStatus, ProjectRef, TerminalSession, VersionInfo, Workspace } from "@ainide/shared";
-import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, GitComparisonRequest, GitComparisonRequestInput, GitComparisonState, Notice, ReviewState } from "./types";
-import type { ReferenceItem } from "./references";
-import { applyAcpServerEvent, type AcpClientState } from "./acp-state";
-import { captureProjectBag, emptyPanes, emptyProjectBag, type AcpPromptDraft, type ProjectUiBag } from "./project-ui";
-import { persistTerminalCollapsed, readTerminalCollapsedPreference } from "./layout-prefs";
+import { create } from "zustand";
+import { type AcpClientState, applyAcpServerEvent } from "./acp-state";
 import { persistBuildSelection, readBuildSelections } from "./build-selections";
 import { language } from "./file-language";
+import { persistTerminalCollapsed, readTerminalCollapsedPreference } from "./layout-prefs";
+import { type AcpPromptDraft, captureProjectBag, emptyPanes, emptyProjectBag, type ProjectUiBag } from "./project-ui";
+import type { ReferenceItem } from "./references";
+import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, GitComparisonRequest, GitComparisonRequestInput, GitComparisonState, Notice, ReviewState } from "./types";
 
 interface AppState {
   token: string;

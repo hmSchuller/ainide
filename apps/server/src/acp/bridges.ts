@@ -1,8 +1,8 @@
 import type { AcpSession } from "@ainide/shared";
-import { ProjectRegistry } from "../projects.js";
-import { AcpSessionError, type AcpResourceHandlers } from "./manager.js";
+import type { ProjectRegistry } from "../projects.js";
+import { type AcpResourceHandlers, AcpSessionError } from "./manager.js";
 import { relativeAcpPath } from "./paths.js";
-import { AcpTerminalManager } from "./terminals.js";
+import type { AcpTerminalManager } from "./terminals.js";
 
 export function createAcpResourceHandlers(projects: ProjectRegistry, terminalManager: AcpTerminalManager): AcpResourceHandlers {
   return {

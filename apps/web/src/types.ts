@@ -1,4 +1,4 @@
-import type { AppMode, FileEntry, GitBaselineUnavailableReason, GitFileComparison, GitStatus, ReviewScope, SessionBootstrap, TerminalSession } from "@ainide/shared";
+import type { AppMode, FileEntry, GitBaselineUnavailableReason, GitFileComparison, ReviewScope, SessionBootstrap, TerminalSession } from "@ainide/shared";
 import type { ReferenceItem } from "./references";
 
 export type { AppMode };

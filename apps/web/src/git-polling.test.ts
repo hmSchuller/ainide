@@ -7,7 +7,7 @@ function environment() {
   let nextTimer = 0;
   const timers = new Map<number, () => void>();
   const listeners = new Map<string, Set<() => void>>();
-  const emit = (event: "focus" | "blur" | "visibilitychange") => listeners.get(event)?.forEach((listener) => listener());
+  const emit = (event: "focus" | "blur" | "visibilitychange") => { listeners.get(event)?.forEach((listener) => { listener(); }); };
   return {
     env: {
       isVisible: () => visible,
@@ -19,7 +19,7 @@ function environment() {
     },
     setActive(nextVisible: boolean, nextFocused: boolean) { visible = nextVisible; focused = nextFocused; emit("visibilitychange"); emit("focus"); },
     fire(event: "focus" | "blur" | "visibilitychange") { emit(event); },
-    tick() { const pending = [...timers.values()]; timers.clear(); pending.forEach((callback) => callback()); },
+    tick() { const pending = [...timers.values()]; timers.clear(); pending.forEach((callback) => { callback(); }); },
     pending() { return timers.size; },
   };
 }
