@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AcpSession, BuildCommand, FileEntry, GitStatus, ProjectAgentSettings, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
-import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getGitFileComparison, getGitStatus, getProjectAgentSettings, getProjectBuildCommands, getReviewStatus, getSession, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, updateProjectAgentSettings, updateProjectBuildCommands, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
+import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getGitFileComparison, getGitStatus, getProjectAgentSettings, getProjectBuildCommands, getReviewStatus, getSession, getVersion, getTerminals, listFiles, openProject, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, updateProjectAgentSettings, updateProjectBuildCommands, writeFile, websocketUrl, type ProjectMutationResponse } from "./api";
 import { EditorSurface, language } from "./components/Editor";
 import { Explorer } from "./components/Explorer";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
@@ -14,6 +14,7 @@ import { BuildRunner } from "./components/BuildRunner";
 import { LazyGitSurface } from "./components/LazyGitSurface";
 import { ReferenceDock } from "./components/ReferenceDock";
 import { WorkspacePicker } from "./components/WorkspacePicker";
+import { UpdateBadge } from "./components/UpdateBadge";
 import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, snapshotFromBag } from "./project-ui";
 import { createAutoSaver } from "./auto-save";
 import { createGitPollingScheduler } from "./git-polling";
@@ -73,6 +74,7 @@ export default function App() {
   const recentChanges = useAppStore((state) => state.recentChanges);
   const referenceKit = useAppStore((state) => state.referenceKit);
   const terminalError = useAppStore((state) => state.terminalError);
+  const version = useAppStore((state) => state.version);
   const setToken = useAppStore((state) => state.setToken);
   const setDirectory = useAppStore((state) => state.setDirectory);
   const addTab = useAppStore((state) => state.addTab);
@@ -422,6 +424,7 @@ export default function App() {
         const session = await getSession();
         const nextToken = session.token ?? session.sessionToken ?? "";
         setToken(nextToken);
+        void getVersion(nextToken).then((version) => useAppStore.getState().setVersion(version)).catch(() => useAppStore.getState().setVersion(undefined));
         applyLists(session, session.restoreError);
         if (session.restoreError) setPickerError(session.restoreError);
         if (session.workspace && session.activeProjectId) {
@@ -907,7 +910,7 @@ export default function App() {
           };
            return <button key={entry} className={active ? "active" : ""} role="tab" aria-selected={active} onClick={onClick}>{label}{entry === "agents" && <span className="mode-count">{terminals.filter((terminal) => terminal.kind === "agent" && terminal.alive).length + acpSessions.filter((session) => session.status === "live" || session.status === "waiting").length}</span>}</button>;
         })}</div>
-        <div className="top-actions"><BuildRunner onOpenSettings={openProjectSettings} /><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
+        <div className="top-actions"><UpdateBadge version={version} /><BuildRunner onOpenSettings={openProjectSettings} /><button className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
     <div className="workbench">
         <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer

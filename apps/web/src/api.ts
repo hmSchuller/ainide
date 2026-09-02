@@ -18,6 +18,7 @@ import type {
   ReviewScope,
   ReviewStatus,
   TerminalSession,
+  VersionInfo,
   Workspace,
   WorkspaceDirectoryChildrenResponse,
   WorkspaceEvent,
@@ -72,6 +73,10 @@ function unwrap<T>(value: T | { workspace: T } | { data: T }): T {
 
 export async function getSession(): Promise<SessionResponse> {
   return request<SessionResponse>("/api/session");
+}
+
+export async function getVersion(token: string): Promise<VersionInfo> {
+  return request<VersionInfo>("/api/version", token);
 }
 
 export async function getWorkspace(token: string): Promise<Workspace> {

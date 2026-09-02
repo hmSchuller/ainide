@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import type { ReviewScope, ReviewStatus } from "@ainide/shared";
+import { bundledToolPath, withToolsPath } from "./tools.js";
 
 const READINESS_TIMEOUT_MS = 10_000;
 const READINESS_POLL_MS = 100;
@@ -31,7 +32,8 @@ export function validateReviewScope(scope: ReviewScope, cwd: string): string | u
 }
 
 export function isCommandAvailable(command: string): boolean {
-  return spawnSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore" }).status === 0;
+  if (bundledToolPath(command)) return true;
+  return spawnSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore", env: withToolsPath(process.env) }).status === 0;
 }
 
 export async function waitForHttpReady(
@@ -112,8 +114,11 @@ export class ReviewManager {
     }
     this.port = await freePort();
     const args = buildDifitArgs(selectedScope, this.port);
+    // The bundled binary (when present) is launched by absolute path so it wins
+    // over a same-named user-installed difit regardless of login-shell PATH.
+    const difit = bundledToolPath("difit") ?? "difit";
     // --include-untracked avoids an interactive untracked-files prompt when stdin is ignored.
-    const child = (this.launchOptions.spawn ?? spawn)("difit", args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = (this.launchOptions.spawn ?? spawn)(difit, args, { cwd, env: withToolsPath(process.env), stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     this.scope = selectedScope;
     let exitCode: number | null = null;

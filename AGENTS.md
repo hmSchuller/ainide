@@ -39,7 +39,8 @@ The backend defaults to `127.0.0.1:43127`. The Vite frontend proxies API and Web
 
 ## Implementation Rules
 
-- Keep the application local-first. Do not add cloud services, accounts, telemetry, or provider-specific AI APIs.
+- Keep the application local-first. Do not add cloud services, accounts, telemetry, or provider-specific AI APIs. The single bounded exception is the startup release check: at most once every six hours, cacheable under `~/.config/ainide/`, carrying no identifying data, and disabled by `AINIDE_NO_UPDATE_CHECK=1`.
+- The terminal owns the server: `ainide` runs the built server in the foreground with no daemon, pidfile, or background process and does not auto-open a browser. `SIGINT`, `SIGTERM`, and `SIGHUP` (including terminal close) each perform the same graceful teardown — stop PTYs/ACP/review and persist the session snapshot. `ainide update` fast-forwards and rebuilds but never restarts a running server. Do not introduce a daemon, service, pidfile, or detached process.
 - Use real PTYs through `node-pty`; do not simulate terminal output in the browser.
 - Keep filesystem access relative to the selected workspace and route paths through the safe resolver.
 - Do not add a generic command-execution HTTP endpoint. Commands belong in explicit PTY sessions or fixed server-side operations.

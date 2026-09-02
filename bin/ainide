@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# ainide launcher. The terminal owns the server: a bare `ainide` runs the built
+# server in the foreground; `ainide update` refreshes the install and tells you
+# to restart. There is no daemon, pidfile, or background process.
+set -euo pipefail
+
+AINIDE_HOME="${AINIDE_HOME:-$HOME/.ainide}"
+SRC_DIR="$AINIDE_HOME/src"
+SERVER_ENTRY="$SRC_DIR/apps/server/dist/index.js"
+
+if [ "${1:-}" = "update" ]; then
+  if [ ! -d "$SRC_DIR/.git" ]; then
+    echo "ainide: no installation found at $SRC_DIR." >&2
+    echo "Install first (see the README), then run 'ainide update'." >&2
+    exit 1
+  fi
+  if [ -n "$(git -C "$SRC_DIR" status --porcelain)" ]; then
+    echo "ainide: the install at $SRC_DIR has local modifications." >&2
+    echo "Commit or stash them, then re-run 'ainide update'." >&2
+    exit 1
+  fi
+  echo "Updating ainide in $SRC_DIR ..."
+  if ! git -C "$SRC_DIR" pull --ff-only; then
+    echo "ainide: could not fast-forward the install." >&2
+    echo "If the branch diverged, re-run the installer to reset $SRC_DIR." >&2
+    exit 1
+  fi
+  ( cd "$SRC_DIR" && npm ci && npm run build )
+  echo "ainide updated. Restart ainide to apply the update."
+  exit 0
+fi
+
+if [ ! -f "$SERVER_ENTRY" ]; then
+  echo "ainide: the server build was not found at $SERVER_ENTRY." >&2
+  echo "Run the installer, or run 'npm run build' in $SRC_DIR." >&2
+  exit 1
+fi
+
+# Foreground launch: exec replaces this shell so signals (incl. SIGHUP) reach
+# the server directly and the terminal keeps the process.
+exec node "$SERVER_ENTRY" "$@"

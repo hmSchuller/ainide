@@ -204,3 +204,54 @@ describe("ReviewManager", () => {
     await manager.stop();
   });
 });
+
+describe("ReviewManager bundled tools", () => {
+  it("passes a PATH with the bundled tools dir prepended to the difit child", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "ainide-review-tools-"));
+    const previousTools = process.env.AINIDE_TOOLS_DIR;
+    process.env.AINIDE_TOOLS_DIR = dir;
+    try {
+      let capturedEnv: NodeJS.ProcessEnv | undefined;
+      let capturedCommand: string | undefined;
+      const manager = new ReviewManager(() => process.cwd(), {
+        isCommandAvailable: () => true,
+        waitForHttpReady: async () => ({ ok: true }),
+        spawn: vi.fn((_command: string, _args: unknown, options: { env?: NodeJS.ProcessEnv }) => {
+          capturedEnv = options?.env;
+          capturedCommand = _command;
+          return { pid: 4242, once: vi.fn(), kill: vi.fn(), stdout: null, stderr: null };
+        }) as unknown as typeof import("node:child_process").spawn,
+      });
+      await manager.start("working-tree", true);
+      expect(capturedCommand).toBe("difit");
+      expect(capturedEnv?.PATH).toBe(`${dir}:${process.env.PATH}`);
+      await manager.stop();
+    } finally {
+      if (previousTools === undefined) delete process.env.AINIDE_TOOLS_DIR;
+      else process.env.AINIDE_TOOLS_DIR = previousTools;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not modify the difit child PATH when the tools dir is disabled", async () => {
+    const previousTools = process.env.AINIDE_TOOLS_DIR;
+    process.env.AINIDE_TOOLS_DIR = "";
+    try {
+      let capturedEnv: NodeJS.ProcessEnv | undefined;
+      const manager = new ReviewManager(() => process.cwd(), {
+        isCommandAvailable: () => true,
+        waitForHttpReady: async () => ({ ok: true }),
+        spawn: vi.fn((_command: string, _args: unknown, options: { env?: NodeJS.ProcessEnv }) => {
+          capturedEnv = options?.env;
+          return { pid: 4242, once: vi.fn(), kill: vi.fn(), stdout: null, stderr: null };
+        }) as unknown as typeof import("node:child_process").spawn,
+      });
+      await manager.start("working-tree", true);
+      expect(capturedEnv).toBe(process.env);
+      await manager.stop();
+    } finally {
+      if (previousTools === undefined) delete process.env.AINIDE_TOOLS_DIR;
+      else process.env.AINIDE_TOOLS_DIR = previousTools;
+    }
+  });
+});

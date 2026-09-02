@@ -16,6 +16,11 @@ import { WorkspaceManager } from "./workspace.js";
 import { createAcpResourceHandlers } from "./acp/bridges.js";
 import { AcpSessionError, AcpSessionManager, type AcpRequestResponse } from "./acp/manager.js";
 import { AcpTerminalManager } from "./acp/terminals.js";
+import { resolveLocalVersion } from "./version.js";
+
+export interface CreateServerOptions {
+  update?: { current?: string; latest?: string; notesUrl?: string };
+}
 
 export interface AinideServer {
   app: FastifyInstance;
@@ -137,7 +142,7 @@ function requestResponse(value: Record<string, unknown>): AcpRequestResponse | u
   return undefined;
 }
 
-export async function createServer(): Promise<AinideServer> {
+export async function createServer(options: CreateServerOptions = {}): Promise<AinideServer> {
   const app = Fastify({ logger: false });
   await app.register(websocket);
   const token = randomBytes(32).toString("hex");
@@ -253,6 +258,15 @@ export async function createServer(): Promise<AinideServer> {
 
   app.get("/api/session", async () => sessionPayload());
   app.addHook("onRequest", tokenGuard(token));
+
+  app.get("/api/version", async () => {
+    const current = options.update?.current ?? (await resolveLocalVersion());
+    return {
+      current,
+      ...(options.update?.latest ? { latest: options.update.latest } : {}),
+      ...(options.update?.notesUrl ? { notesUrl: options.update.notesUrl } : {}),
+    };
+  });
 
   app.get("/api/workspace", async () => projects.currentWorkspace ?? null);
   app.get("/api/workspace/children", async (request, reply) => {

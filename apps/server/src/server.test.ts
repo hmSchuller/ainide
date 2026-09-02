@@ -690,3 +690,39 @@ describe("review bound to the active project", () => {
     await review.stop();
   });
 });
+
+describe("version endpoint", () => {
+  it("returns current/latest/notesUrl and rejects requests without a token", async () => {
+    const sessionsPath = path.join(await mkdtemp(path.join(os.tmpdir(), "ainide-version-api-")), "sessions.json");
+    const previous = process.env.AINIDE_SESSIONS;
+    process.env.AINIDE_SESSIONS = sessionsPath;
+    const server = await createServer({ update: { current: "v1.0.0", latest: "v2.0.0", notesUrl: "https://example.com/v2.0.0" } });
+    try {
+      const denied = await server.app.inject({ method: "GET", url: "/api/version" });
+      expect(denied.statusCode).toBe(401);
+      const ok = await server.app.inject({ method: "GET", url: "/api/version", headers: { "x-session-token": server.token } });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toEqual({ current: "v1.0.0", latest: "v2.0.0", notesUrl: "https://example.com/v2.0.0" });
+    } finally {
+      await server.close();
+      if (previous === undefined) delete process.env.AINIDE_SESSIONS;
+      else process.env.AINIDE_SESSIONS = previous;
+    }
+  });
+
+  it("returns only current when no newer release is known", async () => {
+    const sessionsPath = path.join(await mkdtemp(path.join(os.tmpdir(), "ainide-version-api-2-")), "sessions.json");
+    const previous = process.env.AINIDE_SESSIONS;
+    process.env.AINIDE_SESSIONS = sessionsPath;
+    const server = await createServer({ update: { current: "v2.0.0" } });
+    try {
+      const ok = await server.app.inject({ method: "GET", url: "/api/version", headers: { "x-session-token": server.token } });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toEqual({ current: "v2.0.0" });
+    } finally {
+      await server.close();
+      if (previous === undefined) delete process.env.AINIDE_SESSIONS;
+      else process.env.AINIDE_SESSIONS = previous;
+    }
+  });
+});

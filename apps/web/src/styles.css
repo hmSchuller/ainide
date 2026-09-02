@@ -105,6 +105,11 @@ kbd { color: #929dad; border: 1px solid #343c48; border-radius: 4px; padding: 1p
 .status-pip, .agent-activity i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--mint); }
 .agent-activity { color: #788493; font-size: 11px; white-space: nowrap; }
 .agent-activity i { margin-right: 6px; background: var(--blue); box-shadow: 0 0 0 3px #73a9ff1a; }
+.update-badge { display: inline-flex; align-items: center; gap: 7px; color: #9ba6b3; font-size: 11px; white-space: nowrap; text-decoration: none; }
+.update-badge:hover { color: var(--text); }
+.update-badge strong { color: var(--orange); font-weight: 700; }
+.update-pip { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 3px #ffa6571a; }
+.update-hint { color: #788493; }
 .command-button { border: 1px solid #2e3742; border-radius: 4px; padding: 5px 8px; }
 .command-button span { color: #667281; }
 .mobile-menu { display: none; color: #b9c2cc; background: transparent; font-size: 18px; }

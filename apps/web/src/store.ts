@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AcpActivity, AcpServerEvent, AcpSession, BuildCommand, FileEntry, GitFileComparison, GitStatus, ProjectRef, TerminalSession, Workspace } from "@ainide/shared";
+import type { AcpActivity, AcpServerEvent, AcpSession, BuildCommand, FileEntry, GitFileComparison, GitStatus, ProjectRef, TerminalSession, VersionInfo, Workspace } from "@ainide/shared";
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, GitComparisonRequest, GitComparisonRequestInput, GitComparisonState, Notice, ReviewState } from "./types";
 import type { ReferenceItem } from "./references";
 import { applyAcpServerEvent, type AcpClientState } from "./acp-state";
@@ -47,6 +47,7 @@ interface AppState {
   notices: Notice[];
   review: ReviewState;
   recentChanges: Record<string, number>;
+  version?: VersionInfo;
   terminalError?: string;
   pendingLocation?: { path: string; line: number; column?: number; paneId: EditorPaneId };
   setToken: (token: string) => void;
@@ -97,6 +98,7 @@ interface AppState {
   setBuildCommands: (commands: BuildCommand[]) => void;
   setBuildSelection: (projectId: string, label: string) => void;
   setTerminalError: (error?: string) => void;
+  setVersion: (version?: VersionInfo) => void;
   setPendingLocation: (location?: AppState["pendingLocation"]) => void;
   setProjectSession: (input: { activeProjectId?: string; openProjects: ProjectRef[]; knownProjects: ProjectRef[]; restoreError?: string }) => void;
   stashActiveBag: () => void;
@@ -363,6 +365,7 @@ export const useAppStore = create<AppState>((set) => ({
     set({ terminalMaximized: false });
   },
   setTerminalError: (terminalError) => set({ terminalError }),
+  setVersion: (version) => set({ version }),
   setBuildCommands: (buildCommands) => set({ buildCommands }),
   setBuildSelection: (projectId, label) => {
     persistBuildSelection(projectId, label);

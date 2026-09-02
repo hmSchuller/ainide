@@ -7,6 +7,7 @@ import type { TerminalClientMessage, TerminalServerMessage, TerminalSession } fr
 import pty from "node-pty";
 import type { WebSocket } from "ws";
 import type { AinideConfig } from "./config.js";
+import { bundledToolPath, withToolsPath } from "./tools.js";
 
 type LiveTerminal = {
   session: TerminalSession;
@@ -51,7 +52,7 @@ export class TerminalManager {
     }
     const shell = this.config.defaultShell?.trim() || process.env.SHELL || "/bin/sh";
     const configuredAgent = this.config.agentCommand?.trim();
-    const command = kind === "agent" ? configuredAgent || shell : kind === "lazygit" ? "lazygit" : kind === "build" ? input.command as string : shell;
+    const command = kind === "agent" ? configuredAgent || shell : kind === "lazygit" ? bundledToolPath("lazygit") ?? "lazygit" : kind === "build" ? input.command as string : shell;
     const cols = validDimension(input.cols, 120);
     const rows = validDimension(input.rows, 40);
     const id = randomUUID();
@@ -72,7 +73,7 @@ export class TerminalManager {
         cols,
         rows,
         cwd,
-        env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
+        env: withToolsPath({ ...process.env, TERM: "xterm-256color" }) as Record<string, string>,
       });
     } catch (error) {
       throw new TerminalError(503, `Unable to start terminal: ${error instanceof Error ? error.message : "PTY unavailable"}`);
@@ -212,7 +213,8 @@ function validDimension(value: unknown, fallback: number | undefined): number {
 }
 
 function isAvailable(command: string): boolean {
-  const result = spawnSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore" });
+  if (bundledToolPath(command)) return true;
+  const result = spawnSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore", env: withToolsPath(process.env) });
   return result.status === 0;
 }
 

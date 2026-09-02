@@ -1,4 +1,5 @@
-import { mkdtemp } from "node:fs/promises";
+import { chmodSync, writeFileSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -185,6 +186,51 @@ describe("TerminalManager", () => {
     const second = manager.create({ kind: "build", title: "Second", command: "echo ok", cols: 80, rows: 24 });
     expect(second.command).toBe("echo ok");
     manager.close();
+  });
+
+  it("hands the bundled tools directory to a spawned child's PATH", async () => {
+    const toolsDir = await mkdtemp(path.join(os.tmpdir(), "ainide-pty-tools-"));
+    const outPath = path.join(toolsDir, "path.out");
+    const previousTools = process.env.AINIDE_TOOLS_DIR;
+    process.env.AINIDE_TOOLS_DIR = toolsDir;
+    try {
+      const cwd = await mkdtemp(path.join(os.tmpdir(), "ainide-pty-tools-cwd-"));
+      const manager = new TerminalManager(() => cwd, { defaultShell: "/bin/sh" });
+      const session = manager.create({ kind: "build", title: "path", command: `printf '%s' "$PATH" > "${outPath}"`, cols: 80, rows: 24 });
+      const socket = fakeSocket();
+      manager.connect(socket as unknown as WebSocket, session.id);
+      await waitForExit(manager, session.id);
+      const content = await readFile(outPath, "utf8");
+      expect(content).toContain(path.resolve(toolsDir));
+      manager.close();
+      await rm(cwd, { recursive: true, force: true });
+    } finally {
+      if (previousTools === undefined) delete process.env.AINIDE_TOOLS_DIR;
+      else process.env.AINIDE_TOOLS_DIR = previousTools;
+      await rm(toolsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a bundled lazygit as available and launches it by absolute path", async () => {
+    const toolsDir = await mkdtemp(path.join(os.tmpdir(), "ainide-pty-lazygit-"));
+    const tool = path.join(toolsDir, "lazygit");
+    writeFileSync(tool, "#!/bin/sh\nsleep 30\n");
+    chmodSync(tool, 0o755);
+    const previousTools = process.env.AINIDE_TOOLS_DIR;
+    process.env.AINIDE_TOOLS_DIR = toolsDir;
+    try {
+      const cwd = await mkdtemp(path.join(os.tmpdir(), "ainide-pty-lazygit-cwd-"));
+      const manager = new TerminalManager(() => cwd, { defaultShell: "/bin/sh" });
+      const session = manager.create({ kind: "lazygit", cols: 80, rows: 24 });
+      expect(session.command).toBe(tool);
+      expect(session.alive).toBe(true);
+      manager.close();
+      await rm(cwd, { recursive: true, force: true });
+    } finally {
+      if (previousTools === undefined) delete process.env.AINIDE_TOOLS_DIR;
+      else process.env.AINIDE_TOOLS_DIR = previousTools;
+      await rm(toolsDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps a stopped build session in the list as exited and removes it on a later delete", async () => {
