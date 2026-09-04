@@ -41,7 +41,7 @@ describe("project agent settings integration", () => {
     expect(refreshed.disabled).toEqual(["gemini"]);
 
     const markup = renderToStaticMarkup(
-      <AcpProviderPicker providers={refreshed.all} disabled={refreshed.disabled} loading={false} onRetry={() => undefined} onSelect={() => undefined} onClose={() => undefined} />,
+      <AcpProviderPicker providers={refreshed.all} disabled={refreshed.disabled} loading={false} onRetry={() => undefined} onSelect={() => undefined} onRecentSelect={() => undefined} onClose={() => undefined} />,
     );
     expect(markup).toContain("Cursor");
     expect(markup).toContain("OpenCode");

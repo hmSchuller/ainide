@@ -9,6 +9,8 @@ import type {
   AcpProviderDescriptor,
   AcpProviderPreference,
   AcpProviderPreferenceValue,
+  AcpProviderSessionSummary,
+  AcpProviderSessionsResult,
   AcpServerEvent,
   AcpSession,
   AcpSessionCapabilities,
@@ -51,6 +53,8 @@ export interface AcpSessionManagerOptions {
   onPreferencesChange?: (preferences: AcpProviderPreference[]) => void | Promise<void>;
   resources?: AcpResourceHandlers;
   maxHistoryItems?: number;
+  listTimeoutMs?: number;
+  listCacheTtlMs?: number;
 }
 
 type PendingResponse = acp.RequestPermissionResponse | acp.CreateElicitationResponse;
@@ -74,10 +78,13 @@ type LiveAcpSession = {
   exitHandled: boolean;
 };
 
+export type AcpProviderSessionList = AcpProviderSessionsResult;
+
 const DEFAULT_CAPABILITIES: AcpSessionCapabilities = {
   canCancel: true,
   canClose: false,
   canLoad: false,
+  canList: false,
   canResume: false,
   canSetConfig: false,
   canReadTextFile: true,
@@ -89,6 +96,10 @@ const DEFAULT_CAPABILITIES: AcpSessionCapabilities = {
 
 const MAX_PROMPT_TEXT = 1_000_000;
 const MAX_PROMPT_CONTEXT_ITEMS = 100;
+const MAX_PROVIDER_SESSIONS = 20;
+const MAX_PROVIDER_SESSION_TITLE = 120;
+const MAX_PROVIDER_SESSION_ID = 200;
+const LIVE_SESSION_STATUSES = new Set(["connecting", "auth_required", "live", "waiting"]);
 
 export class AcpSessionError extends Error {
   constructor(readonly statusCode: number, message: string) {
@@ -100,10 +111,16 @@ export class AcpSessionError extends Error {
 export class AcpSessionManager {
   private readonly sessions = new Map<string, LiveAcpSession>();
   private readonly providerPreferenceValues = new Map<string, Map<string, AcpProviderPreferenceValue>>();
+  private readonly listCache = new Map<string, { expiresAt: number; value: AcpProviderSessionList }>();
+  private readonly listInFlight = new Map<string, Promise<AcpProviderSessionList>>();
   private readonly maxHistoryItems: number;
+  private readonly listTimeoutMs: number;
+  private readonly listCacheTtlMs: number;
 
   constructor(private readonly options: AcpSessionManagerOptions) {
     this.maxHistoryItems = options.maxHistoryItems ?? 2_000;
+    this.listTimeoutMs = options.listTimeoutMs ?? 10_000;
+    this.listCacheTtlMs = options.listCacheTtlMs ?? 30_000;
     for (const preference of parseAcpProviderPreferences(options.initialPreferences) ?? []) this.providerPreferenceValues.set(preference.providerId, new Map(Object.entries(preference.values)));
   }
 
@@ -159,12 +176,61 @@ export class AcpSessionManager {
     return [...this.providerPreferenceValues.entries()].map(([providerId, values]) => ({ providerId, values: Object.fromEntries(values) }));
   }
 
-  async create(input: { projectId: string; rootPath: string; providerId: string; title?: string }): Promise<AcpSession> {
+  async listProviderSessions(providerId: string, rootPath: string): Promise<AcpProviderSessionList> {
+    const provider = this.provider(providerId);
+    if (!provider) throw new AcpSessionError(404, "Configured ACP provider not found");
+    if (!rootPath) throw new AcpSessionError(409, "Open a workspace before listing ACP sessions");
+    const key = `${providerId}\u0000${rootPath}`;
+    const cached = this.listCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    if (cached) this.listCache.delete(key);
+    const inFlight = this.listInFlight.get(key);
+    if (inFlight) return inFlight;
+    const listing = this.transientProviderSessions(provider, rootPath)
+      .then((value) => {
+        this.listCache.set(key, { expiresAt: Date.now() + this.listCacheTtlMs, value });
+        return value;
+      })
+      .finally(() => {
+        this.listInFlight.delete(key);
+      });
+    this.listInFlight.set(key, listing);
+    return listing;
+  }
+
+  private async transientProviderSessions(provider: AcpAgentConfig, rootPath: string): Promise<AcpProviderSessionList> {
+    if (!provider.command) return { available: false, sessions: [] };
+    let transport: AcpTransport | undefined;
+    try {
+      transport = openAcpTransport({ command: provider.command, args: provider.args, cwd: rootPath, env: provider.env });
+      const adapter = new AcpProtocolAdapter(transport, transientCallbacks());
+      adapter.connect();
+      const initialized = await withTimeout(adapter.initialize(), this.listTimeoutMs);
+      if (initialized.protocolVersion !== acp.PROTOCOL_VERSION) return { available: false, sessions: [] };
+      if (!capabilitiesFor(initialized).canList) return { available: false, sessions: [] };
+      const listed = await withTimeout(adapter.listSessions(rootPath), this.listTimeoutMs);
+      return { available: true, sessions: summarizeProviderSessions(listed.sessions, rootPath) };
+    } catch {
+      // A slow or broken provider degrades to "resume unavailable" without blocking the picker.
+      return { available: false, sessions: [] };
+    } finally {
+      transport?.close();
+      if (transport) await transport.closed.catch(() => undefined);
+    }
+  }
+
+  async create(input: { projectId: string; rootPath: string; providerId: string; title?: string; acpSessionId?: string }): Promise<AcpSession> {
     const provider = this.provider(input.providerId);
     if (!provider) throw new AcpSessionError(400, "Configured ACP provider not found");
     const title = cleanTitle(input.title === undefined ? provider.label : input.title);
     if (!title) throw new AcpSessionError(400, "A session title is required");
     if (!input.rootPath) throw new AcpSessionError(409, "Open a workspace before creating an ACP session");
+    const acpSessionId = cleanProviderSessionId(input.acpSessionId);
+    if (input.acpSessionId !== undefined && !acpSessionId) throw new AcpSessionError(400, "A valid provider session id is required to resume");
+    if (acpSessionId) {
+      const existing = this.liveSessionFor(input.providerId, acpSessionId);
+      if (existing) return cloneSession(existing.public);
+    }
 
     const record = this.newRecord({
       id: randomUUID(),
@@ -173,11 +239,13 @@ export class AcpSessionManager {
       projectId: input.projectId,
       provider,
       rootPath: input.rootPath,
+      acpSessionId,
     });
     try {
       await this.connectRecord(record);
       try {
-        await this.createProviderSession(record);
+        if (acpSessionId) await this.loadProviderSession(record, acpSessionId);
+        else await this.createProviderSession(record);
       } catch (error) {
         if (!isAuthRequired(error)) throw error;
         record.public.status = "auth_required";
@@ -449,6 +517,71 @@ export class AcpSessionManager {
     record.public.error = undefined;
   }
 
+  private async loadProviderSession(record: LiveAcpSession, acpSessionId: string): Promise<void> {
+    if (!record.adapter) throw new Error("ACP provider is not connected");
+    if (!record.public.capabilities.canLoad && !record.public.capabilities.canResume) {
+      throw new AcpSessionError(409, "This provider cannot load a provider session");
+    }
+    // Bind the id before loading so the replayed session updates are attributed to this record.
+    record.public.acpSessionId = acpSessionId;
+    const response = record.public.capabilities.canLoad
+      ? await record.adapter.loadSession(acpSessionId, record.rootPath)
+      : await record.adapter.resumeSession(acpSessionId, record.rootPath);
+    if (response) this.applySessionResponse(record, response);
+    await this.applyProviderPreferences(record);
+    record.public.resumability = record.public.capabilities.canLoad || record.public.capabilities.canResume ? "resumable" : "non_resumable";
+    record.public.status = "live";
+    record.public.error = undefined;
+  }
+
+  async rollover(id: string): Promise<AcpSession> {
+    const record = this.require(id);
+    if (record.public.activePrompt) throw new AcpSessionError(409, "Cancel the active prompt first");
+    if (record.public.status === "auth_required") throw new AcpSessionError(409, "Authenticate the provider before starting a new context");
+    if (record.public.status !== "live" || !record.adapter || !record.public.acpSessionId) throw new AcpSessionError(409, "ACP session is not live");
+    const closedId = record.public.acpSessionId;
+    const canClose = record.public.capabilities.canClose;
+    const snapshot = {
+      history: record.history,
+      configOptions: record.public.configOptions,
+      availableCommands: record.public.availableCommands,
+      acpSessionId: closedId,
+      title: record.public.title,
+      titleSource: record.public.titleSource,
+    };
+    // Revert a provider-derived title before the swap so a fresh provider title arriving mid-rollover wins.
+    const titleReverted = record.public.titleSource !== "user";
+    if (titleReverted) {
+      record.public.title = record.provider.label;
+      record.public.titleSource = "provider";
+    }
+    record.public.availableCommands = [];
+    record.public.configOptions = [];
+    record.history = [];
+    try {
+      await this.createProviderSession(record);
+    } catch (error) {
+      record.history = snapshot.history;
+      record.public.configOptions = snapshot.configOptions;
+      record.public.availableCommands = snapshot.availableCommands;
+      record.public.acpSessionId = snapshot.acpSessionId;
+      if (titleReverted) {
+        record.public.title = snapshot.title;
+        record.public.titleSource = snapshot.titleSource;
+      }
+      record.public.status = "live";
+      this.publishStatus(record);
+      if (error instanceof AcpSessionError) throw error;
+      throw new AcpSessionError(503, `Unable to start a new ACP context: ${errorMessage(error, record.provider)}`);
+    }
+    if (canClose) {
+      try { await record.adapter?.closeSession(closedId); } catch { /* The previous context stays resumable in the provider store. */ }
+    }
+    this.publishStatus(record);
+    this.persist(record.public.projectId);
+    return cloneSession(record.public);
+  }
+
   private applyRestoredSession(record: LiveAcpSession): void {
     record.public.resumability = "restored";
     record.public.status = "live";
@@ -596,6 +729,10 @@ export class AcpSessionManager {
     if (!providerSessionId || providerSessionId !== record.public.acpSessionId) throw new Error("ACP session ID does not match the local session");
   }
 
+  private liveSessionFor(providerId: string, acpSessionId: string): LiveAcpSession | undefined {
+    return [...this.sessions.values()].find((record) => record.public.providerId === providerId && record.public.acpSessionId === acpSessionId && LIVE_SESSION_STATUSES.has(record.public.status));
+  }
+
   private require(id: string): LiveAcpSession {
     const record = this.sessions.get(id);
     if (!record) throw new AcpSessionError(404, "ACP session not found");
@@ -711,6 +848,7 @@ function capabilitiesFor(response: acp.InitializeResponse): AcpSessionCapabiliti
   return {
     ...DEFAULT_CAPABILITIES,
     canLoad: Boolean(capabilities?.loadSession),
+    canList: Boolean(capabilities?.sessionCapabilities?.list),
     canResume: Boolean(capabilities?.sessionCapabilities?.resume),
     canClose: Boolean(capabilities?.sessionCapabilities?.close),
   };
@@ -776,4 +914,66 @@ function isAuthRequired(error: unknown): boolean {
 function isCancelled(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === -32800)
     || errorMessage(error).toLowerCase().includes("cancel");
+}
+
+function cleanProviderSessionId(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = value.trim();
+  return clean && clean.length <= MAX_PROVIDER_SESSION_ID ? clean : undefined;
+}
+
+function cleanSummaryText(value: string | null | undefined, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: untrusted provider titles are sanitized deliberately
+  const clean = value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return clean ? clean.slice(0, maxLength) : undefined;
+}
+
+function cleanSummaryTimestamp(value: string | null | undefined): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const time = Date.parse(value);
+  return Number.isNaN(time) || Math.abs(time) > 8.64e15 ? undefined : new Date(time).toISOString();
+}
+
+function summaryTimestamp(summary: AcpProviderSessionSummary): number {
+  return summary.updatedAt ? Date.parse(summary.updatedAt) : Number.NaN;
+}
+
+export function summarizeProviderSessions(sessions: readonly acp.SessionInfo[] | undefined, rootPath: string): AcpProviderSessionSummary[] {
+  return (sessions ?? [])
+    .flatMap((info) => {
+      const sessionId = cleanProviderSessionId(info?.sessionId);
+      if (!sessionId || info.cwd !== rootPath) return [];
+      const title = cleanSummaryText(info.title, MAX_PROVIDER_SESSION_TITLE);
+      const updatedAt = cleanSummaryTimestamp(info.updatedAt);
+      return [{ sessionId, ...(title ? { title } : {}), ...(updatedAt ? { updatedAt } : {}) }];
+    })
+    .sort((left, right) => (summaryTimestamp(right) || -Infinity) - (summaryTimestamp(left) || -Infinity))
+    .slice(0, MAX_PROVIDER_SESSIONS);
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("ACP provider request timed out")), timeoutMs);
+    timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
+function transientCallbacks(): AcpProtocolCallbacks {
+  const unavailable = (operation: string) => new Error(`ACP ${operation} is not available while listing provider sessions`);
+  return {
+    sessionUpdate: async () => undefined,
+    requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+    createElicitation: async () => ({ action: "cancel" }),
+    readTextFile: async () => { throw unavailable("file access"); },
+    writeTextFile: async () => { throw unavailable("file access"); },
+    createTerminal: async () => { throw unavailable("terminal access"); },
+    terminalOutput: async () => { throw unavailable("terminal access"); },
+    releaseTerminal: async () => undefined,
+    waitForTerminalExit: async () => { throw unavailable("terminal access"); },
+    killTerminal: async () => undefined,
+    completeElicitation: async () => undefined,
+  };
 }

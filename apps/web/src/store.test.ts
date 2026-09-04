@@ -12,8 +12,14 @@ vi.hoisted(() => {
   });
 });
 
+vi.mock("./api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api")>()),
+  getAcpProviderSessions: vi.fn(),
+}));
+
+import { getAcpProviderSessions } from "./api";
 import { TERMINAL_COLLAPSED_KEY } from "./layout-prefs";
-import { findPaneForPath, gitComparisonKey, useAppStore } from "./store";
+import { findPaneForPath, gitComparisonKey, useAppStore, recentSessionsState } from "./store";
 
 describe("store tab rename", () => {
   beforeEach(() => {
@@ -148,7 +154,7 @@ describe("combined agent state", () => {
         providerLabel: "Fake",
         authMethods: [],
         status: "live",
-        capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
+        capabilities: { canCancel: true, canClose: false, canLoad: false, canList: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
         configOptions: [],
         availableCommands: [],
         pendingRequests: [],
@@ -170,8 +176,8 @@ describe("combined agent state", () => {
   it("filters ACP bootstrap data to the active project and resets replay state on switch", () => {
     useAppStore.setState({ activeProjectId: "/project-a", acpHistory: { old: [{ type: "turn", status: "completed" }] }, acpSequences: { old: 4 }, acpQueued: {} });
     useAppStore.getState().setAcpSessions([
-       { id: "a", title: "A", titleSource: "user", projectId: "/project-a", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true }, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" },
-       { id: "b", title: "B", titleSource: "user", projectId: "/project-b", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true }, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" },
+       { id: "a", title: "A", titleSource: "user", projectId: "/project-a", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities: { canCancel: true, canClose: false, canLoad: false, canList: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true }, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" },
+       { id: "b", title: "B", titleSource: "user", projectId: "/project-b", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities: { canCancel: true, canClose: false, canLoad: false, canList: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true }, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" },
     ]);
     expect(useAppStore.getState().acpSessions.map((session) => session.id)).toEqual(["a"]);
     useAppStore.getState().setProjectSession({ activeProjectId: "/project-b", openProjects: [], knownProjects: [] });
@@ -190,7 +196,7 @@ describe("combined agent state", () => {
       providerLabel: "Fake",
       authMethods: [],
       status: "live" as const,
-      capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
+      capabilities: { canCancel: true, canClose: false, canLoad: false, canList: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
       configOptions: [],
       availableCommands: commands,
       pendingRequests: [],
@@ -262,5 +268,149 @@ describe("transient Git comparison state", () => {
     useAppStore.getState().setToken("token-b");
     useAppStore.getState().setGitComparisonError({ projectId: "project-a", path: "src/a.ts", head: "head-a", token: "token-a", requestId: second!, message: "obsolete" });
     expect(useAppStore.getState().gitComparisons).toEqual({});
+  });
+});
+
+const capabilities = { canCancel: true, canClose: false, canLoad: true, canList: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true };
+
+function resumedSession(id: string, overrides: Record<string, unknown> = {}): {
+  id: string;
+  title: string;
+  titleSource: "provider";
+  projectId: string;
+  providerId: string;
+  providerLabel: string;
+  authMethods: never[];
+  status: "live";
+  capabilities: typeof capabilities;
+  configOptions: never[];
+  availableCommands: never[];
+  pendingRequests: never[];
+  activePrompt: boolean;
+  resumability: "resumable";
+  [key: string]: unknown;
+} {
+  const { id: idOverride, ...rest } = overrides as Record<string, unknown> & { id?: string };
+  return {
+    id: (idOverride as string) ?? id,
+    title: "Resumed context",
+    titleSource: "provider",
+    projectId: "/project-a",
+    providerId: "fake",
+    providerLabel: "Fake provider",
+    authMethods: [],
+    status: "live",
+    capabilities,
+    configOptions: [],
+    availableCommands: [],
+    pendingRequests: [],
+    activePrompt: false,
+    resumability: "resumable",
+    ...rest,
+  };
+}
+
+describe("recent provider sessions", () => {
+  beforeEach(() => {
+    vi.mocked(getAcpProviderSessions).mockReset();
+    useAppStore.setState({ token: "token-1", activeProjectId: "/project-a", recentAcpSessions: {} });
+  });
+
+  it("moves through loading into an available result", async () => {
+    vi.mocked(getAcpProviderSessions).mockResolvedValueOnce({ available: true, sessions: [{ sessionId: "s-1", title: "Prior context", updatedAt: "2026-02-01T00:00:00.000Z" }] });
+    const fetch = useAppStore.getState().fetchAcpProviderSessions("fake");
+    expect(useAppStore.getState().recentAcpSessions.fake).toEqual({ status: "loading", sessions: [] });
+    await fetch;
+    expect(useAppStore.getState().recentAcpSessions.fake).toEqual({ status: "available", sessions: [{ sessionId: "s-1", title: "Prior context", updatedAt: "2026-02-01T00:00:00.000Z" }] });
+  });
+
+  it("maps an empty listing to the muted empty state", async () => {
+    vi.mocked(getAcpProviderSessions).mockResolvedValueOnce({ available: true, sessions: [] });
+    await useAppStore.getState().fetchAcpProviderSessions("fake");
+    expect(useAppStore.getState().recentAcpSessions.fake).toEqual({ status: "empty", sessions: [] });
+  });
+
+  it("marks unlisting providers and request failures as unavailable", async () => {
+    vi.mocked(getAcpProviderSessions).mockResolvedValueOnce({ available: false, sessions: [] });
+    await useAppStore.getState().fetchAcpProviderSessions("fake");
+    expect(useAppStore.getState().recentAcpSessions.fake).toEqual({ status: "unavailable", sessions: [] });
+
+    vi.mocked(getAcpProviderSessions).mockRejectedValueOnce(new Error("Boom"));
+    await useAppStore.getState().fetchAcpProviderSessions("fake");
+    expect(useAppStore.getState().recentAcpSessions.fake).toEqual({ status: "unavailable", sessions: [] });
+  });
+
+  it("clears recent sessions on project switch and drops a stale response", async () => {
+    useAppStore.setState({ recentAcpSessions: { fake: { status: "available", sessions: [{ sessionId: "s-1" }] } } });
+    let resolveStale: (value: { available: boolean; sessions: [] }) => void = () => undefined;
+    vi.mocked(getAcpProviderSessions).mockReturnValueOnce(new Promise((resolve) => { resolveStale = resolve; }));
+    const pending = useAppStore.getState().fetchAcpProviderSessions("fake");
+    useAppStore.getState().setProjectSession({ activeProjectId: "/project-b", openProjects: [], knownProjects: [] });
+    expect(useAppStore.getState().recentAcpSessions).toEqual({});
+    resolveStale({ available: true, sessions: [] });
+    await pending;
+    expect(useAppStore.getState().recentAcpSessions).toEqual({});
+  });
+});
+
+describe("session rollover adoption", () => {
+  beforeEach(() => {
+    useAppStore.setState({ activeProjectId: "/project-a", acpSessions: [], acpHistory: {} });
+  });
+
+  it("updates a rolled-over session in place and clears its local history", () => {
+    const session = resumedSession("rollover-target");
+    useAppStore.setState({ acpSessions: [session], acpHistory: { "rollover-target": [{ type: "turn", status: "completed" }] } });
+    useAppStore.getState().applyAcpRollover({ ...session, title: "Fake provider", acpSessionId: "provider-session-2" });
+    expect(useAppStore.getState().acpSessions).toEqual([{ ...session, title: "Fake provider", acpSessionId: "provider-session-2" }]);
+    expect(useAppStore.getState().acpHistory["rollover-target"]).toBeUndefined();
+  });
+
+  it("ignores rollover updates for sessions it does not hold", () => {
+    const rolled = resumedSession("foreign-session", { projectId: "/project-a" });
+    useAppStore.setState({ acpSessions: [], acpHistory: {} });
+    useAppStore.getState().applyAcpRollover(rolled);
+    expect(useAppStore.getState().acpSessions).toEqual([]);
+  });
+});
+
+describe("resuming a recent session", () => {
+  beforeEach(() => {
+    useAppStore.setState({ activeProjectId: "/project-a", acpSessions: [], focusedSessionId: undefined });
+  });
+
+  it("keeps one workbench entry and focuses the returned session when resuming a live session", () => {
+    const live = resumedSession("existing-session");
+    useAppStore.setState({ acpSessions: [live] });
+    // The server returns the already-live session for the resumed provider session id.
+    useAppStore.getState().addAcpSession({ ...live, title: "Resumed context" });
+    useAppStore.getState().setFocusedSession(live.id);
+    expect(useAppStore.getState().acpSessions).toHaveLength(1);
+    expect(useAppStore.getState().acpSessions[0]?.title).toBe("Resumed context");
+    expect(useAppStore.getState().focusedSessionId).toBe("existing-session");
+  });
+
+  it("adopts a freshly resumed session and focuses it without duplicate entries", () => {
+    const created = resumedSession("new-session");
+    useAppStore.getState().setFocusedSession(created.id);
+    useAppStore.getState().addAcpSession(created);
+    expect(useAppStore.getState().acpSessions.map((session) => session.id)).toEqual(["new-session"]);
+    expect(useAppStore.getState().focusedSessionId).toBe("new-session");
+    // A repeated create response for the same session never grows the workbench,
+    // and merges never clobber the entry the browser already observed.
+    useAppStore.getState().addAcpSession(resumedSession("new-session", { title: "Provider title" }));
+    expect(useAppStore.getState().acpSessions).toHaveLength(1);
+    expect(useAppStore.getState().acpSessions[0]?.title).toBe("Resumed context");
+    expect(useAppStore.getState().focusedSessionId).toBe("new-session");
+  });
+});
+
+describe("recent sessions state mapping", () => {
+  it("normalizes results into the four picker states", () => {
+    expect(recentSessionsState({ status: "loading" })).toEqual({ status: "loading", sessions: [] });
+    expect(recentSessionsState({ status: "available", sessions: [{ sessionId: "s-1" }] })).toEqual({ status: "available", sessions: [{ sessionId: "s-1" }] });
+    expect(recentSessionsState({ status: "available", sessions: [] })).toEqual({ status: "empty", sessions: [] });
+    expect(recentSessionsState({ status: "empty" })).toEqual({ status: "empty", sessions: [] });
+    expect(recentSessionsState({ status: "unavailable" })).toEqual({ status: "unavailable", sessions: [] });
   });
 });

@@ -20,6 +20,7 @@ import { WorkspaceManager } from "./workspace.js";
 
 export interface CreateServerOptions {
   update?: { current?: string; latest?: string; notesUrl?: string };
+  acpListTimeoutMs?: number;
 }
 
 export interface AinideServer {
@@ -186,6 +187,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<A
     onEvent: sendAcpEvent,
     onPreferencesChange: () => persistSoon(),
     resources: createAcpResourceHandlers(projects, acpTerminals),
+    ...(options.acpListTimeoutMs !== undefined ? { listTimeoutMs: options.acpListTimeoutMs } : {}),
     onPersistenceChange: (projectId, descriptors) => {
       if (projects.updateUiSnapshot(projectId, { acpSessions: descriptors })) persistSoon();
     },
@@ -415,6 +417,17 @@ export async function createServer(options: CreateServerOptions = {}): Promise<A
     return session;
   };
   app.get("/api/acp/providers", async () => acp.providers(projects.activeId));
+  app.get("/api/acp/providers/:providerId/sessions", async (request, reply) => {
+    const projectId = projects.activeId;
+    if (!projectId) return reply.code(409).send({ error: "Open a workspace before listing ACP sessions" });
+    const providerId = requestParam(request, "providerId");
+    if (!acp.providers(projectId).some((provider) => provider.id === providerId)) {
+      return reply.code(404).send({ error: "Configured ACP provider not found" });
+    }
+    try {
+      return await acp.listProviderSessions(providerId, projectId);
+    } catch (error) { errorReply(reply, error); }
+  });
   app.get("/api/project/agents", async (request, reply) => {
     const requested = (request.query as { projectId?: unknown }).projectId;
     const rootPath = typeof requested === "string" && requested ? requested : projects.activeId;
@@ -484,8 +497,23 @@ export async function createServer(options: CreateServerOptions = {}): Promise<A
     const projectId = projects.activeId;
     if (!projectId) return reply.code(409).send({ error: "Open a workspace before creating an ACP session" });
     if (typeof values.providerId !== "string" || (values.title !== undefined && typeof values.title !== "string")) return reply.code(400).send({ error: "providerId and optional string title are required" });
+    if (values.acpSessionId !== undefined && (typeof values.acpSessionId !== "string" || !values.acpSessionId.trim() || values.acpSessionId.length > 200)) {
+      return reply.code(400).send({ error: "acpSessionId must be a non-empty string of at most 200 characters" });
+    }
     try {
-      return await acp.create({ projectId, rootPath: projectId, providerId: values.providerId, ...(typeof values.title === "string" ? { title: values.title } : {}) });
+      return await acp.create({
+        projectId,
+        rootPath: projectId,
+        providerId: values.providerId,
+        ...(typeof values.title === "string" ? { title: values.title } : {}),
+        ...(typeof values.acpSessionId === "string" ? { acpSessionId: values.acpSessionId } : {}),
+      });
+    } catch (error) { errorReply(reply, error); }
+  });
+  app.post("/api/acp/sessions/:id/new", async (request, reply) => {
+    try {
+      const session = activeAcpSession(requestParam(request, "id"));
+      return await acp.rollover(session.id);
     } catch (error) { errorReply(reply, error); }
   });
   app.post("/api/acp/sessions/:id/prompt", async (request, reply) => {

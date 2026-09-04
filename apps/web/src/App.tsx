@@ -66,6 +66,8 @@ export default function App() {
   const directories = useAppStore((state) => state.directories);
   const terminals = useAppStore((state) => state.terminals);
   const acpSessions = useAppStore((state) => state.acpSessions);
+  const recentAcpSessions = useAppStore((state) => state.recentAcpSessions);
+  const fetchAcpProviderSessions = useAppStore((state) => state.fetchAcpProviderSessions);
   const tabs = useAppStore((state) => state.tabs);
   const panes = useAppStore((state) => state.panes);
   const focusedPaneId = useAppStore((state) => state.focusedPaneId);
@@ -782,6 +784,15 @@ export default function App() {
     void loadAgentSettings();
   };
 
+  useEffect(() => {
+    if (!providerPickerOpen || !token || !agentSettings) return;
+    const disabledIds = new Set(agentSettings.disabled);
+    for (const provider of agentSettings.all) {
+      if (disabledIds.has(provider.id)) continue;
+      void fetchAcpProviderSessions(provider.id);
+    }
+  }, [agentSettings, fetchAcpProviderSessions, providerPickerOpen, token]);
+
   const openProjectSettings = () => {
     if (!token) return;
     setProjectSettingsOpen(true);
@@ -817,13 +828,13 @@ export default function App() {
     setNotice("Build commands saved", "success");
   };
 
-  const startAcpProvider = async (providerId: string) => {
+  const startAcpProvider = async (providerId: string, acpSessionId?: string) => {
     if (!token || startingProviderRef.current) return;
     startingProviderRef.current = providerId;
     setStartingProviderId(providerId);
     setAgentSettingsError(undefined);
     try {
-      const created = await createAcpSession(providerId, token);
+      const created = await createAcpSession(providerId, token, acpSessionId ? { acpSessionId } : {});
       addAcpSession(created);
       if (useAppStore.getState().activeProjectId === created.projectId) {
         useAppStore.getState().setFocusedSession(created.id);
@@ -966,7 +977,7 @@ export default function App() {
         void openFromPath(path, token).then(() => setAddingProject(false)).catch((error) => setPickerError(error instanceof Error ? error.message : "Could not open workspace")).finally(() => setPickerBusy(false));
       }} />
      </div>}
-    {providerPickerOpen && <AcpProviderPicker providers={agentSettings?.all ?? []} disabled={agentSettings?.disabled ?? []} loading={agentSettingsLoading} error={agentSettingsError} startingProviderId={startingProviderId} onRetry={() => void loadAgentSettings()} onSelect={(providerId) => void startAcpProvider(providerId)} onClose={() => setProviderPickerOpen(false)} />}
+    {providerPickerOpen && <AcpProviderPicker providers={agentSettings?.all ?? []} disabled={agentSettings?.disabled ?? []} loading={agentSettingsLoading} error={agentSettingsError} startingProviderId={startingProviderId} recentSessions={recentAcpSessions} onRetry={() => void loadAgentSettings()} onSelect={(providerId) => void startAcpProvider(providerId)} onRecentSelect={(providerId, sessionId) => void startAcpProvider(providerId, sessionId)} onClose={() => setProviderPickerOpen(false)} />}
     {projectSettingsOpen && <ProjectAgentSettingsDialog settings={agentSettings} builds={buildCommands} loading={agentSettingsLoading} error={agentSettingsError} onRetry={() => void loadAgentSettings()} onToggle={(providerId, disabled) => void toggleAgentDisabled(providerId, disabled)} onSaveBuilds={saveProjectBuilds} onClose={() => setProjectSettingsOpen(false)} />}
     {/* Palette/quick-open overlay double-clicks dismiss the modal; Escape and close controls exist */}
     {/* biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismiss; the palette owns Escape/close */}

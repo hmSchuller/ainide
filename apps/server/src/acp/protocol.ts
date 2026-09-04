@@ -73,6 +73,10 @@ export class AcpProtocolAdapter {
     return this.agent().request(acp.methods.agent.session.new, { cwd, mcpServers: [] });
   }
 
+  listSessions(cwd?: string): Promise<acp.ListSessionsResponse> {
+    return this.agent().request(acp.methods.agent.session.list, { ...(cwd ? { cwd } : {}) });
+  }
+
   loadSession(sessionId: string, cwd: string): Promise<acp.LoadSessionResponse | void> {
     return this.agent().request(acp.methods.agent.session.load, { sessionId, cwd, mcpServers: [] });
   }

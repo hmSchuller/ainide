@@ -1,5 +1,7 @@
 import type { AcpProviderDescriptor } from "@ainide/shared";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { describeRecentSessionRecency, recentSessionLabel } from "../acp-recent-sessions";
+import type { AcpRecentSessionsState } from "../store";
 
 interface AcpProviderPickerProps {
   providers: AcpProviderDescriptor[];
@@ -7,12 +9,41 @@ interface AcpProviderPickerProps {
   loading: boolean;
   error?: string;
   startingProviderId?: string;
+  recentSessions?: Record<string, AcpRecentSessionsState>;
+  initialExpandedProviders?: string[];
   onRetry: () => void;
   onSelect: (providerId: string) => void;
+  onRecentSelect: (providerId: string, sessionId: string) => void;
   onClose: () => void;
 }
 
-export function AcpProviderPicker({ providers, disabled = [], loading, error, startingProviderId, onRetry, onSelect, onClose }: AcpProviderPickerProps) {
+function RecentSessions({ providerId, label, state, busy, expanded, onToggle, onRecentSelect }: { providerId: string; label: string; state?: AcpRecentSessionsState; busy: boolean; expanded: boolean; onToggle: () => void; onRecentSelect: AcpProviderPickerProps["onRecentSelect"] }) {
+  if (!state) return <div className="acp-recent-sessions" role="group" aria-label={`Recent ${label} sessions`}><small>Checking recent sessions...</small></div>;
+  if (state.status === "loading") return <div className="acp-recent-sessions" role="group" aria-label={`Recent ${label} sessions`}><small role="status">Checking recent sessions...</small></div>;
+  if (state.status === "unavailable") return <div className="acp-recent-sessions" role="group" aria-label={`Recent ${label} sessions`}><small>Resuming is unavailable for {label}</small></div>;
+  if (!state.sessions.length) return <div className="acp-recent-sessions" role="group" aria-label={`Recent ${label} sessions`}><small>No resumable sessions in this workspace</small></div>;
+  const listId = `acp-recent-${providerId}`;
+  return (
+    <div className="acp-recent-sessions" role="group" aria-label={`Recent ${label} sessions`}>
+      <button type="button" className="acp-recent-toggle" aria-expanded={expanded} aria-controls={listId} disabled={busy} onClick={onToggle}><span>{expanded ? "▾" : "▸"} Recent sessions ({state.sessions.length})</span></button>
+      {expanded && (
+      <div className="acp-recent-list" id={listId}>
+      {state.sessions.map((summary) => {
+        const recency = describeRecentSessionRecency(summary.updatedAt);
+        return (
+          <button type="button" className="acp-recent-session" key={summary.sessionId} disabled={busy} onClick={() => onRecentSelect(providerId, summary.sessionId)}>
+            <span><strong>{recentSessionLabel(summary)}</strong>{recency && <small>{recency}</small>}</span>
+            <span className="acp-provider-arrow">↺</span>
+          </button>
+        );
+      })}
+      </div>
+      )}
+    </div>
+  );
+}
+
+export function AcpProviderPicker({ providers, disabled = [], loading, error, startingProviderId, recentSessions, initialExpandedProviders, onRetry, onSelect, onRecentSelect, onClose }: AcpProviderPickerProps) {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !startingProviderId) onClose();
@@ -23,6 +54,10 @@ export function AcpProviderPicker({ providers, disabled = [], loading, error, st
 
   const disabledIds = new Set(disabled);
   const enabled = providers.filter((provider) => !disabledIds.has(provider.id));
+  // Per-provider expand state, collapsed by default. The picker unmounts on
+  // close, so reopening naturally resets every provider to collapsed.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => Object.fromEntries((initialExpandedProviders ?? []).map((id) => [id, true])));
+  const toggleExpanded = (providerId: string) => setExpanded((current) => ({ ...current, [providerId]: !current[providerId] }));
 
   // Provider-picker overlay double-clicks dismiss the modal; dialog owns Escape/close
   return (
@@ -40,7 +75,12 @@ export function AcpProviderPicker({ providers, disabled = [], loading, error, st
       {!loading && !error && providers.length > 0 && !enabled.length && <div className="acp-picker-state" role="status"><strong>No ACP providers available for this project</strong><span>Every configured provider is disabled here. Re-enable one from Project settings.</span><button type="button" onClick={onRetry}>Check again</button></div>}
       {/* Layout container naming a control group; a fieldset would change layout semantics */}
       {/* biome-ignore lint/a11y/useSemanticElements: grouped action list, not a form field group */}
-      {!loading && !error && enabled.length > 0 && <div className="acp-provider-list" role="group" aria-label="Configured ACP providers">{enabled.map((provider) => <button type="button" className={`acp-provider-option ${startingProviderId === provider.id ? "starting" : ""}`} key={provider.id} disabled={Boolean(startingProviderId)} onClick={() => onSelect(provider.id)}><span className="acp-provider-glyph">◎</span><span><strong>{provider.label}</strong><small>{startingProviderId === provider.id ? "Starting session..." : "Start a new session"}</small></span><span className="acp-provider-arrow">→</span></button>)}</div>}
+      {!loading && !error && enabled.length > 0 && <div className="acp-provider-list" role="group" aria-label="Configured ACP providers">{enabled.map((provider) => (
+        <div className="acp-provider-group" key={provider.id}>
+          <button type="button" className={`acp-provider-option ${startingProviderId === provider.id ? "starting" : ""}`} disabled={Boolean(startingProviderId)} onClick={() => onSelect(provider.id)}><span className="acp-provider-glyph">◎</span><span><strong>{provider.label}</strong><small>{startingProviderId === provider.id ? "Starting session..." : "Start a new session"}</small></span><span className="acp-provider-arrow">→</span></button>
+          <RecentSessions providerId={provider.id} label={provider.label} state={recentSessions?.[provider.id]} busy={Boolean(startingProviderId)} expanded={Boolean(expanded[provider.id])} onToggle={() => toggleExpanded(provider.id)} onRecentSelect={onRecentSelect} />
+        </div>
+      ))}</div>}
       {!loading && !error && <button type="button" className="acp-picker-cancel" onClick={onClose} disabled={Boolean(startingProviderId)}>Cancel</button>}
     </section>
     </div>

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,7 +11,8 @@ const environments: Array<{ sessions?: string; config?: string }> = [];
 async function project(prefix: string): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), prefix));
   await writeFile(path.join(root, "readme.txt"), "hello\n", "utf8");
-  return root;
+  // Opened projects are registered under the resolved absolute path (macOS /var -> /private/var).
+  return realpath(root);
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -22,17 +23,23 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 
 function providerScript(): string {
   return [
+    "const fs = require('node:fs');",
+    "if (process.env.ACP_SPAWN_LOG) { try { fs.appendFileSync(process.env.ACP_SPAWN_LOG, 'spawn\\n'); } catch {} }",
     "const readline = require('node:readline');",
     "const rl = readline.createInterface({ input: process.stdin });",
+    "let newSessionCount = 0;",
+    "let currentSessionId = 'server-provider-session';",
     "const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');",
-    "const update = (sessionId) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'server-message', content: { type: 'text', text: 'server response' } } } }) + '\\n');",
+    "const fail = (id, code, message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }) + '\\n');",
+    "const update = (sessionId, text) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'server-message', content: { type: 'text', text } } } }) + '\\n');",
     "const commands = (sessionId) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'review', description: 'Review the current changes', input: { hint: 'scope to review' } }, { name: 'skill', description: 'Run a provider skill' }] } } }) + '\\n');",
     "rl.on('line', (line) => {",
     "  const message = JSON.parse(line);",
-     "  if (message.method === 'initialize') send(message.id, { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } }, authMethods: [] });",
-     "  else if (message.method === 'session/new') { send(message.id, { sessionId: 'server-provider-session' }); setTimeout(() => commands('server-provider-session'), 0); }",
-     "  else if (message.method === 'session/load') { send(message.id, {}); setTimeout(() => commands('server-provider-session'), 0); }",
-    "  else if (message.method === 'session/prompt') { update('server-provider-session'); send(message.id, { stopReason: 'end_turn' }); }",
+     "  if (message.method === 'initialize') send(message.id, { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { close: {}, ...(process.env.ACP_LIST_CAP ? { list: {} } : {}) } }, authMethods: [] });",
+     "  else if (message.method === 'session/new') { newSessionCount += 1; currentSessionId = newSessionCount === 1 ? 'server-provider-session' : 'server-provider-session-' + newSessionCount; send(message.id, { sessionId: currentSessionId }); setTimeout(() => commands(currentSessionId), 0); }",
+     "  else if (message.method === 'session/load') { if (process.env.ACP_LOAD_FAIL) { fail(message.id, -32001, 'Cannot load the requested session'); } else { currentSessionId = message.params.sessionId; send(message.id, {}); setTimeout(() => { update(currentSessionId, 'server load replay'); commands(currentSessionId); }, 0); } }",
+    "  else if (message.method === 'session/list') { if (process.env.ACP_LIST_SLOW) return; send(message.id, { sessions: process.env.ACP_LIST_FIXTURE ? JSON.parse(process.env.ACP_LIST_FIXTURE) : [] }); }",
+    "  else if (message.method === 'session/prompt') { update(currentSessionId, 'server response'); if (process.env.ACP_PROMPT_DELAY) setTimeout(() => send(message.id, { stopReason: 'end_turn' }), Number(process.env.ACP_PROMPT_DELAY)); else send(message.id, { stopReason: 'end_turn' }); }",
     "  else if (message.method === 'session/close') send(message.id, {});",
     "});",
   ].join('\n');
@@ -42,17 +49,17 @@ function headers(token: string, json = true): Record<string, string> {
   return json ? { "x-session-token": token, "content-type": "application/json" } : { "x-session-token": token };
 }
 
-async function startServer(): Promise<{ server: AinideServer; sessionsPath: string }> {
+async function startServer(options: { acpListTimeoutMs?: number; providerEnv?: Record<string, string> } = {}): Promise<{ server: AinideServer; sessionsPath: string }> {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ainide-acp-server-"));
   const sessionsPath = path.join(directory, "sessions.json");
   const configPath = path.join(directory, "config.json");
-  await writeFile(configPath, JSON.stringify({ acpAgents: [{ id: "fake", label: "Fake ACP", command: process.execPath, args: ["-e", providerScript()], env: { ACP_SERVER_TEST: "secret" } }] }), "utf8");
+  await writeFile(configPath, JSON.stringify({ acpAgents: [{ id: "fake", label: "Fake ACP", command: process.execPath, args: ["-e", providerScript()], env: { ACP_SERVER_TEST: "secret", ...(options.providerEnv ?? {}) } }] }), "utf8");
   const previousSessions = process.env.AINIDE_SESSIONS;
   const previousConfig = process.env.AINIDE_CONFIG;
   environments.push({ sessions: previousSessions, config: previousConfig });
   process.env.AINIDE_SESSIONS = sessionsPath;
   process.env.AINIDE_CONFIG = configPath;
-  const server = await createServer();
+  const server = await createServer({ ...(options.acpListTimeoutMs !== undefined ? { acpListTimeoutMs: options.acpListTimeoutMs } : {}) });
   servers.push(server);
   return { server, sessionsPath };
 }
@@ -248,5 +255,139 @@ describe("ACP server API", () => {
     servers.push(restoredServer);
     expect(restoredServer.acp.get(sessionId)).toMatchObject({ id: sessionId, status: "live", resumability: "restored" });
     expect(restoredServer.acp.list(projectId)).toHaveLength(1);
+  });
+
+  it("lists provider sessions with auth, workspace scoping, and caching", async () => {
+    const root = await project("ainide-acp-list-");
+    const spawnDirectory = await mkdtemp(path.join(os.tmpdir(), "ainide-acp-list-log-"));
+    const spawnLog = path.join(spawnDirectory, "spawn.log");
+    await writeFile(spawnLog, "");
+    const fixture = [
+      { sessionId: "s-elsewhere", cwd: "/elsewhere", title: "Elsewhere", updatedAt: "2026-03-01T00:00:00Z" },
+      { sessionId: "s-live", cwd: root, title: "Live session", updatedAt: "2026-02-01T00:00:00Z" },
+      { sessionId: "s-stale", cwd: root, title: "Stale session", updatedAt: "2026-01-01T00:00:00Z" },
+    ];
+    const { server } = await startServer({ providerEnv: { ACP_LIST_CAP: "1", ACP_LIST_FIXTURE: JSON.stringify(fixture), ACP_SPAWN_LOG: spawnLog } });
+    const auth = headers(server.token, false);
+    expect((await server.app.inject({ method: "GET", url: "/api/acp/providers/fake/sessions" })).statusCode).toBe(401);
+    expect((await server.app.inject({ method: "GET", url: "/api/acp/providers/fake/sessions", headers: auth })).statusCode).toBe(409);
+
+    await server.app.inject({ method: "POST", url: "/api/projects/open", headers: headers(server.token), payload: { path: root } });
+    const listed = await server.app.inject({ method: "GET", url: "/api/acp/providers/fake/sessions", headers: auth });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual({
+      available: true,
+      sessions: [
+        { sessionId: "s-live", title: "Live session", updatedAt: "2026-02-01T00:00:00.000Z" },
+        { sessionId: "s-stale", title: "Stale session", updatedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+    });
+    expect((await server.app.inject({ method: "GET", url: "/api/acp/providers/missing/sessions", headers: auth })).statusCode).toBe(404);
+
+    await server.app.inject({ method: "GET", url: "/api/acp/providers/fake/sessions", headers: auth });
+    expect((await readFile(spawnLog, "utf8")).trim().split("\n")).toHaveLength(1);
+  });
+
+  it("marks providers without listing support as unavailable", async () => {
+    const root = await project("ainide-acp-nolist-");
+    const { server } = await startServer();
+    const auth = headers(server.token, false);
+    await server.app.inject({ method: "POST", url: "/api/projects/open", headers: headers(server.token), payload: { path: root } });
+    const listed = await server.app.inject({ method: "GET", url: "/api/acp/providers/fake/sessions", headers: auth });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual({ available: false, sessions: [] });
+  });
+
+  it("degrades a slow provider session list to unavailable without blocking start-new", async () => {
+    const root = await project("ainide-acp-slow-");
+    const { server } = await startServer({ acpListTimeoutMs: 150, providerEnv: { ACP_LIST_CAP: "1", ACP_LIST_SLOW: "1" } });
+    const auth = headers(server.token, false);
+    await server.app.inject({ method: "POST", url: "/api/projects/open", headers: headers(server.token), payload: { path: root } });
+    const started = Date.now();
+    const listed = await server.app.inject({ method: "GET", url: "/api/acp/providers/fake/sessions", headers: auth });
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual({ available: false, sessions: [] });
+    const created = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: headers(server.token), payload: { providerId: "fake", title: "Still startable" } });
+    expect(created.statusCode).toBe(200);
+  });
+
+  it("creates sessions from a provider session id and keeps them scoped to the active project", async () => {
+    const first = await project("ainide-acp-resume-first-");
+    const second = await project("ainide-acp-resume-second-");
+    const { server } = await startServer();
+    const auth = headers(server.token);
+    await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth, payload: { path: first } });
+    expect((await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", acpSessionId: "" } })).statusCode).toBe(400);
+    expect((await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", acpSessionId: 42 } })).statusCode).toBe(400);
+
+    const created = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", title: "Resumed", acpSessionId: "server-provider-session" } });
+    expect(created.statusCode).toBe(200);
+    const session = created.json() as { id: string; status: string; acpSessionId?: string; projectId: string };
+    expect(session).toMatchObject({ status: "live", acpSessionId: "server-provider-session", projectId: first, providerId: "fake" });
+    await waitFor(() => server.acp.history(session.id).some((activity) => activity.type === "message" && activity.text === "server load replay"));
+
+    const dedupe = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", title: "Resumed again", acpSessionId: "server-provider-session" } });
+    expect(dedupe.statusCode).toBe(200);
+    expect(dedupe.json()).toMatchObject({ id: session.id, title: "Resumed" });
+
+    await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth, payload: { path: second } });
+    expect((await server.app.inject({ method: "GET", url: `/api/acp/sessions/${session.id}`, headers: headers(server.token, false) })).statusCode).toBe(409);
+    const dedupedCrossProject = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", title: "Cross project resume", acpSessionId: "server-provider-session" } });
+    expect(dedupedCrossProject.statusCode).toBe(200);
+    expect(dedupedCrossProject.json()).toMatchObject({ id: session.id, projectId: first });
+    const freshInOtherProject = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", title: "Other project resume", acpSessionId: "other-provider-session" } });
+    expect(freshInOtherProject.statusCode).toBe(200);
+    expect(freshInOtherProject.json()).toMatchObject({ projectId: second, acpSessionId: "other-provider-session" });
+  });
+
+  it("reports a failed provider session load without keeping the session", async () => {
+    const root = await project("ainide-acp-loadfail-");
+    const { server } = await startServer({ providerEnv: { ACP_LOAD_FAIL: "1" } });
+    const auth = headers(server.token);
+    await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth, payload: { path: root } });
+    const created = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", acpSessionId: "server-provider-session" } });
+    expect(created.statusCode).toBe(503);
+    expect((created.json() as { error?: string }).error).toContain("Cannot load the requested session");
+    expect(server.acp.list(server.projects.activeId)).toEqual([]);
+  });
+
+  it("rolls sessions over to a fresh provider context on demand", async () => {
+    const root = await project("ainide-acp-rollover-");
+    const { server } = await startServer();
+    const auth = headers(server.token);
+    await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth, payload: { path: root } });
+    const created = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", title: "Roll me" } });
+    const session = created.json() as { id: string };
+
+    expect((await server.app.inject({ method: "POST", url: `/api/acp/sessions/${session.id}/new`, headers: { "content-type": "application/json", "x-session-token": "wrong" } })).statusCode).toBe(401);
+    await server.app.inject({ method: "POST", url: `/api/acp/sessions/${session.id}/prompt`, headers: auth, payload: { text: "Hello" } });
+    expect(server.acp.history(session.id).some((activity) => activity.type === "message" && activity.text === "server response")).toBe(true);
+
+    const rolled = await server.app.inject({ method: "POST", url: `/api/acp/sessions/${session.id}/new`, headers: headers(server.token, false) });
+    expect(rolled.statusCode).toBe(200);
+    expect(rolled.json()).toMatchObject({ id: session.id, status: "live", acpSessionId: "server-provider-session-2", title: "Roll me" });
+    expect(server.acp.history(session.id)).toEqual([]);
+  });
+
+  it("rejects rollover while a prompt is active and allows it afterwards", async () => {
+    const root = await project("ainide-acp-rollover-busy-");
+    const { server } = await startServer({ providerEnv: { ACP_PROMPT_DELAY: "500" } });
+    const auth = headers(server.token);
+    await server.app.inject({ method: "POST", url: "/api/projects/open", headers: auth, payload: { path: root } });
+    const created = await server.app.inject({ method: "POST", url: "/api/acp/sessions", headers: auth, payload: { providerId: "fake", title: "Busy roller" } });
+    const session = created.json() as { id: string };
+    const prompt = server.app.inject({ method: "POST", url: `/api/acp/sessions/${session.id}/prompt`, headers: auth, payload: { text: "Long turn" } });
+    await waitFor(() => server.acp.get(session.id)?.activePrompt === true);
+
+    const rejected = await server.app.inject({ method: "POST", url: `/api/acp/sessions/${session.id}/new`, headers: headers(server.token, false) });
+    expect(rejected.statusCode).toBe(409);
+    expect((rejected.json() as { error?: string }).error).toBe("Cancel the active prompt first");
+
+    await prompt;
+    await waitFor(() => server.acp.get(session.id)?.activePrompt === false);
+    const rolled = await server.app.inject({ method: "POST", url: `/api/acp/sessions/${session.id}/new`, headers: headers(server.token, false) });
+    expect(rolled.statusCode).toBe(200);
+    expect(rolled.json()).toMatchObject({ id: session.id, acpSessionId: "server-provider-session-2" });
   });
 });

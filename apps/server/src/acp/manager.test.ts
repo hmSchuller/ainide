@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AcpProviderPreference, AcpServerEvent } from "@ainide/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AinideConfig } from "../config.js";
@@ -5,25 +8,34 @@ import { type AcpResourceHandlers, AcpSessionManager } from "./manager.js";
 
 function fakeProviderScript(): string {
   return [
+    "const fs = require('node:fs');",
+    "if (process.env.ACP_SPAWN_LOG) { try { fs.appendFileSync(process.env.ACP_SPAWN_LOG, 'spawn\\n'); } catch {} }",
     "const readline = require('node:readline');",
     "const mode = process.env.ACP_TEST_MODE || 'prompt';",
     "const optionsFor = (configId, value) => mode === 'dynamic-config' ? [{ type: 'select', id: 'model', name: 'Model', currentValue: configId === 'model' ? value : 'default', options: [{ value: 'default', name: 'Default' }, { value: 'fast', name: 'Fast' }] }, { type: 'select', id: 'effort', name: 'Effort', currentValue: configId === 'effort' ? value : 'low', options: configId === 'model' && value === 'fast' ? [{ value: 'low', name: 'Low' }] : [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] }] : [{ type: 'boolean', id: 'thinking', name: 'Thinking', currentValue: configId === 'thinking' ? value : true }];",
     "const rl = readline.createInterface({ input: process.stdin });",
     "let activePromptId;",
+    "let newSessionCount = 0;",
     "const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');",
     "const fail = (id, code, message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }) + '\\n');",
-    "const update = (sessionId, text) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'message-1', content: { type: 'text', text } } } }) + '\\n');",
+    "const update = (sessionId, text, messageId = 'message-1') => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text } } } }) + '\\n');",
     "const commands = (sessionId, availableCommands) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'available_commands_update', availableCommands } } }) + '\\n');",
+    "const logMethod = (method) => { if (process.env.ACP_METHOD_LOG && ['session/new', 'session/load', 'session/close'].includes(method)) { try { fs.appendFileSync(process.env.ACP_METHOD_LOG, method + '\\n'); } catch {} } };",
     "rl.on('line', (line) => {",
     "  const message = JSON.parse(line);",
+    "  logMethod(message.method);",
     "  if (message.method === 'initialize') {",
-    "    send(message.id, { protocolVersion: mode === 'bad-protocol' ? 99 : 1, agentCapabilities: mode === 'non-resumable' ? { sessionCapabilities: {} } : { loadSession: true, sessionCapabilities: { resume: {}, close: {} } }, authMethods: mode === 'auth' ? [{ id: 'local', name: 'Local login' }] : [] });",
+    "    send(message.id, { protocolVersion: mode === 'bad-protocol' ? 99 : 1, agentCapabilities: mode === 'non-resumable' ? { sessionCapabilities: {} } : { loadSession: true, sessionCapabilities: { resume: {}, close: {}, ...((mode === 'list' || mode === 'list-slow') ? { list: {} } : {}) } }, authMethods: mode === 'auth' ? [{ id: 'local', name: 'Local login' }] : [] });",
     "  } else if (message.method === 'authenticate') { process.env.ACP_AUTHENTICATED = 'true'; send(message.id, {}); }",
     "  else if (message.method === 'session/new') {",
     "    if (mode === 'stderr') fail(message.id, -32001, 'API_KEY=' + process.env.API_KEY);",
     "    else if (mode === 'auth' && !process.env.ACP_AUTHENTICATED) fail(message.id, -32000, 'Authentication required');",
-     "    else { process.env.ACP_AUTHENTICATED = 'true'; send(message.id, { sessionId: 'provider-session-1', configOptions: optionsFor() }); if (mode === 'commands' || mode === 'commands-dynamic') setTimeout(() => commands('provider-session-1', [{ name: 'plan', description: 'Create a plan', input: { hint: 'what to plan' } }, { name: 'skill', description: 'Run a skill' }]), 0); if (mode === 'commands-dynamic') { setTimeout(() => commands('provider-session-1', [{ name: 'review', description: 'Review changes' }]), 50); setTimeout(() => commands('provider-session-1', []), 100); } if (mode === 'title') { const titleUpdate = (title) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'provider-session-1', update: { sessionUpdate: 'session_info_update', title } } }) + '\\n'); setTimeout(() => titleUpdate('Generated title'), 0); setTimeout(() => titleUpdate('Provider follow-up'), 100); } if (mode === 'exit') setTimeout(() => process.exit(7), 20); }",
-     "  } else if (message.method === 'session/load') { send(message.id, { configOptions: optionsFor() }); if (mode === 'title') setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'provider-session-1', update: { sessionUpdate: 'session_info_update', title: 'Provider restored' } } }) + '\\n'), 0); }",
+     "    else { process.env.ACP_AUTHENTICATED = 'true'; newSessionCount += 1; const sessionId = newSessionCount === 1 ? 'provider-session-1' : 'provider-session-' + newSessionCount; send(message.id, { sessionId, configOptions: optionsFor() }); const titlePatch = (title) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'session_info_update', title } } }) + '\\n'); if (mode === 'rollover-title' && newSessionCount === 1) setTimeout(() => titlePatch('Generated title'), 0); if (mode === 'commands' || mode === 'commands-dynamic') setTimeout(() => commands(sessionId, [{ name: 'plan', description: 'Create a plan', input: { hint: 'what to plan' } }, { name: 'skill', description: 'Run a skill' }]), 0); if (mode === 'commands-dynamic') { setTimeout(() => commands(sessionId, [{ name: 'review', description: 'Review changes' }]), 50); setTimeout(() => commands(sessionId, []), 100); } if (mode === 'title') { setTimeout(() => titlePatch('Generated title'), 0); if (newSessionCount === 1) setTimeout(() => titlePatch('Provider follow-up'), 100); } if (mode === 'exit') setTimeout(() => process.exit(7), 20); }",
+      "  } else if (message.method === 'session/load') {",
+      "    if (mode === 'load-fail') { fail(message.id, -32001, 'Cannot load the requested session'); return; }",
+      "    if (mode === 'load-replay') { update('provider-session-1', 'replayed one', 'replay-1'); update('provider-session-1', 'replayed two', 'replay-2'); }",
+      "    send(message.id, { configOptions: optionsFor() }); if (mode === 'title') setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'provider-session-1', update: { sessionUpdate: 'session_info_update', title: 'Provider restored' } } }) + '\\n'), 0); }",
+     "  else if (message.method === 'session/list') { if (mode === 'list-slow') return; send(message.id, { sessions: process.env.ACP_LIST_FIXTURE ? JSON.parse(process.env.ACP_LIST_FIXTURE) : [] }); }",
     "  else if (message.method === 'session/set_config_option') { if (mode === 'reject-config') fail(message.id, -32001, 'Configuration rejected'); else send(message.id, { configOptions: optionsFor(message.params.configId, message.params.value) }); }",
     "  else if (message.method === 'session/close') send(message.id, {});",
     "  else if (message.method === 'session/cancel') { if (mode !== 'close-pending') send(activePromptId, { stopReason: 'cancelled' }); }",
@@ -276,6 +288,130 @@ describe("ACP session manager", () => {
     await sessions.close();
   });
 
+  it("loads a selected provider session, replays its transcript, and persists the loaded id", async () => {
+    const events: AcpServerEvent[] = [];
+    const sessions = manager("load-replay", (event) => events.push(event));
+    const created = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Resumed", acpSessionId: "provider-session-1" });
+
+    expect(created).toMatchObject({ id: expect.any(String), status: "live", acpSessionId: "provider-session-1", resumability: "resumable" });
+    expect(created.configOptions).toEqual([expect.objectContaining({ id: "thinking" })]);
+    expect(sessions.history(created.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "message", role: "agent", text: "replayed one" }),
+      expect.objectContaining({ type: "message", role: "agent", text: "replayed two" }),
+    ]));
+    expect(sessions.descriptors("project-1")).toEqual([expect.objectContaining({ id: created.id, title: "Resumed", providerId: "fake", acpSessionId: "provider-session-1", resumability: "resumable", titleSource: "user" })]);
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session_event", event: expect.objectContaining({ type: "status" }) })]));
+    await sessions.close();
+  });
+
+  it("returns an already-live session when the same provider session is resumed again", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ainide-dedupe-"));
+    const spawnLog = path.join(directory, "spawn.log");
+    await writeFile(spawnLog, "");
+    const sessions = managerWithProviders([
+      { id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "restore", ACP_SPAWN_LOG: spawnLog } },
+    ], () => undefined);
+    const first = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Resume", acpSessionId: "provider-session-1" });
+    const second = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Resume again", acpSessionId: "provider-session-1" });
+
+    expect(second.id).toBe(first.id);
+    expect(second.title).toBe("Resume");
+    expect((await readFile(spawnLog, "utf8")).trim().split("\n")).toHaveLength(1);
+    expect(sessions.list()).toHaveLength(1);
+    await sessions.close();
+  });
+
+  it("fails a provider session load loudly without keeping a dead session", async () => {
+    const sessions = manager("load-fail", () => undefined);
+    const error = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Broken", acpSessionId: "provider-session-1" }).then(() => undefined, (reason) => reason);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Cannot load the requested session");
+    expect(sessions.list()).toEqual([]);
+    await sessions.close();
+  });
+
+  it("rejects resuming without a usable provider session id", async () => {
+    const sessions = manager("restore", () => undefined);
+    await expect(sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Empty", acpSessionId: "   " })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Long", acpSessionId: "x".repeat(201) })).rejects.toMatchObject({ statusCode: 400 });
+    expect(sessions.list()).toEqual([]);
+    await sessions.close();
+  });
+
+  it("rolls a live session over to a new provider context on the same process", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ainide-rollover-"));
+    const methodLog = path.join(directory, "methods.log");
+    await writeFile(methodLog, "");
+    const events: AcpServerEvent[] = [];
+    const sessions = managerWithProviders([
+      { id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "prompt", ACP_METHOD_LOG: methodLog } },
+    ], (event) => events.push(event));
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Roll target" });
+    const prompt = sessions.prompt(session.id, { text: "Populate history" });
+    await waitFor(() => sessions.get(session.id)?.status === "waiting");
+    const request = events.find((event): event is Extract<AcpServerEvent, { type: "session_event" }> => event.type === "session_event" && event.event.type === "request");
+    if (request?.event.type !== "request") throw new Error("permission request was not emitted");
+    sessions.respondToRequest(session.id, request.event.request.request.requestId, { outcome: "selected", optionId: "allow" });
+    await prompt;
+    expect(sessions.history(session.id).length).toBeGreaterThan(0);
+
+    const rolled = await sessions.rollover(session.id);
+
+    expect(rolled).toMatchObject({ id: session.id, acpSessionId: "provider-session-2", status: "live", title: "Roll target", titleSource: "user" });
+    expect(sessions.history(session.id)).toEqual([]);
+    expect(await readFile(methodLog, "utf8")).toBe(["session/new", "session/new", "session/close", ""].join("\n"));
+    await sessions.close();
+  });
+  it("rolls over without calling provider close when close support is not advertised", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ainide-rollover-noclose-"));
+    const methodLog = path.join(directory, "methods.log");
+    await writeFile(methodLog, "");
+    const sessions = managerWithProviders([
+      { id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "non-resumable", ACP_METHOD_LOG: methodLog } },
+    ], () => undefined);
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "No close" });
+    const rolled = await sessions.rollover(session.id);
+
+    expect(rolled).toMatchObject({ id: session.id, acpSessionId: "provider-session-2", status: "live" });
+    expect(await readFile(methodLog, "utf8")).toBe(["session/new", "session/new", ""].join("\n"));
+    await sessions.close();
+  });
+
+  it("clears history and reverts only provider-derived titles on rollover", async () => {
+    const sessions = managerWithProviders([
+      { id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "rollover-title" } },
+    ], () => undefined);
+    const derived = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake" });
+    await waitFor(() => sessions.get(derived.id)?.title === "Generated title");
+
+    const rolled = await sessions.rollover(derived.id);
+    expect(rolled).toMatchObject({ title: "Fake provider", titleSource: "provider" });
+    expect(sessions.get(derived.id)).toMatchObject({ title: "Fake provider", titleSource: "provider" });
+    await sessions.close();
+  });
+
+  it("rejects rollover while a prompt is active or the session needs authentication", async () => {
+    const events: AcpServerEvent[] = [];
+    const sessions = manager("prompt", (event) => events.push(event));
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Roll guard" });
+    const prompt = sessions.prompt(session.id, { text: "Busy" });
+    await waitFor(() => sessions.get(session.id)?.status === "waiting");
+    await expect(sessions.rollover(session.id)).rejects.toMatchObject({ statusCode: 409, message: "Cancel the active prompt first" });
+    const request = events.find((event): event is Extract<AcpServerEvent, { type: "session_event" }> => event.type === "session_event" && event.event.type === "request");
+    if (request?.event.type !== "request") throw new Error("permission request was not emitted");
+    sessions.respondToRequest(session.id, request.event.request.request.requestId, { outcome: "selected", optionId: "allow" });
+    await prompt;
+
+    const authSessions = manager("auth", () => undefined);
+    const authSession = await authSessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Auth" });
+    await expect(authSessions.rollover(authSession.id)).rejects.toMatchObject({ statusCode: 409 });
+    expect(authSessions.get(authSession.id)).toMatchObject({ status: "auth_required" });
+    expect(authSessions.get(authSession.id)?.acpSessionId).toBeUndefined();
+    await sessions.close();
+    await authSessions.close();
+  });
+
   it("does not forward provider callbacks for another session", async () => {
     const readTextFile = vi.fn(async () => ({ content: "secret" }));
     const sessions = manager("bad-resource", () => undefined, { readTextFile });
@@ -438,5 +574,110 @@ describe("ACP session manager", () => {
     expect(sessions.providers("/project-a").map((provider) => provider.id)).toEqual(["cursor", "opencode"]);
     expect(sessions.providers("/project-b").map((provider) => provider.id)).toEqual(["cursor", "opencode", "gemini"]);
     expect(sessions.providers().map((provider) => provider.id)).toEqual(["cursor", "opencode", "gemini"]);
+  });
+
+  it("maps the session listing capability from the initialize response", async () => {    const listing = manager("list", () => undefined);
+    const listed = await listing.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Listing" });
+    expect(listed.capabilities.canList).toBe(true);
+    await listing.close();
+
+    const plain = manager("prompt", () => undefined);
+    const created = await plain.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Plain" });
+    expect(created.capabilities.canList).toBe(false);
+    await plain.close();
+  });
+
+  it("lists provider sessions for the active workspace with sanitized bounded output", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "ainide-list-"));
+    const fixture = [
+      { sessionId: "s-other", cwd: "/elsewhere", title: "Other workspace", updatedAt: "2026-01-16T00:00:00Z" },
+      { sessionId: "s-recent", cwd: workspace, title: "Recent session", updatedAt: "2026-01-15T10:00:00Z" },
+      { sessionId: "s-older", cwd: workspace, title: "  Old   session\u0007 ", updatedAt: "2026-01-02T10:00:00Z" },
+      { sessionId: "", cwd: workspace, title: "No id" },
+      { sessionId: "s-long", cwd: workspace, title: `x${"y".repeat(300)}`, updatedAt: "2026-01-10T00:00:00Z" },
+      { sessionId: "s-untitled", cwd: workspace, title: null, updatedAt: "not-a-date" },
+    ];
+    const sessions = new AcpSessionManager({
+      config: { acpAgents: [{ id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "list", ACP_LIST_FIXTURE: JSON.stringify(fixture) } }] },
+      onEvent: () => undefined,
+    });
+    const result = await sessions.listProviderSessions("fake", workspace);
+
+    expect(result.available).toBe(true);
+    expect(result.sessions).toEqual([
+      { sessionId: "s-recent", title: "Recent session", updatedAt: "2026-01-15T10:00:00.000Z" },
+      { sessionId: "s-long", title: `x${"y".repeat(119)}`, updatedAt: "2026-01-10T00:00:00.000Z" },
+      { sessionId: "s-older", title: "Old session", updatedAt: "2026-01-02T10:00:00.000Z" },
+      { sessionId: "s-untitled" },
+    ]);
+    await sessions.close();
+  });
+
+  it("bounds the provider session list to the newest entries", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "ainide-bound-"));
+    const fixture = Array.from({ length: 24 }, (_, index) => ({
+      sessionId: `bulk-${index}`,
+      cwd: workspace,
+      title: `Bulk ${index}`,
+      updatedAt: new Date(Date.parse("2026-03-01T00:00:00Z") - index * 60_000).toISOString(),
+    }));
+    fixture.push({ sessionId: "s-other", cwd: "/elsewhere", title: "Other", updatedAt: "2027-01-01T00:00:00Z" });
+    const sessions = new AcpSessionManager({
+      config: { acpAgents: [{ id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "list", ACP_LIST_FIXTURE: JSON.stringify(fixture) } }] },
+      onEvent: () => undefined,
+    });
+    const result = await sessions.listProviderSessions("fake", workspace);
+
+    expect(result.sessions).toHaveLength(20);
+    expect(result.sessions.map((summary) => summary.sessionId)).toEqual(Array.from({ length: 20 }, (_, index) => `bulk-${index}`));
+    await sessions.close();
+  });
+
+  it("caches successful provider session listings and deduplicates in-flight requests", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ainide-cache-"));
+    const spawnLog = path.join(directory, "spawn.log");
+    await writeFile(spawnLog, "");
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "ainide-cache-ws-"));
+    const makeManager = () => new AcpSessionManager({
+      config: { acpAgents: [{ id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "list", ACP_LIST_FIXTURE: JSON.stringify([{ sessionId: "s-1", cwd: workspace, title: "One", updatedAt: "2026-01-01T00:00:00Z" }]), ACP_SPAWN_LOG: spawnLog } }] },
+      onEvent: () => undefined,
+    });
+    const sequential = makeManager();
+    await sequential.listProviderSessions("fake", workspace);
+    await sequential.listProviderSessions("fake", workspace);
+    expect((await readFile(spawnLog, "utf8")).trim().split("\n")).toHaveLength(1);
+    await sequential.close();
+
+    const concurrentLog = path.join(directory, "concurrent.log");
+    await writeFile(concurrentLog, "");
+    const concurrent = new AcpSessionManager({
+      config: { acpAgents: [{ id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "list", ACP_LIST_FIXTURE: JSON.stringify([{ sessionId: "s-1", cwd: workspace, title: "One", updatedAt: "2026-01-01T00:00:00Z" }]), ACP_SPAWN_LOG: concurrentLog } }] },
+      onEvent: () => undefined,
+    });
+    await Promise.all([concurrent.listProviderSessions("fake", workspace), concurrent.listProviderSessions("fake", workspace)]);
+    expect((await readFile(concurrentLog, "utf8")).trim().split("\n")).toHaveLength(1);
+    await concurrent.close();
+  });
+
+  it("marks providers without listing support and slow listings as unavailable", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "ainide-unavailable-"));
+    const withoutCapability = manager("prompt", () => undefined);
+    const started = Date.now();
+    await expect(withoutCapability.listProviderSessions("fake", workspace)).resolves.toEqual({ available: false, sessions: [] });
+    expect(Date.now() - started).toBeLessThan(3_000);
+    await withoutCapability.close();
+
+    const slow = new AcpSessionManager({
+      config: { acpAgents: [{ id: "fake", label: "Fake provider", command: process.execPath, args: ["-e", fakeProviderScript()], env: { ACP_TEST_MODE: "list-slow" } }] },
+      onEvent: () => undefined,
+      listTimeoutMs: 120,
+    });
+    const begun = Date.now();
+    await expect(slow.listProviderSessions("fake", workspace)).resolves.toEqual({ available: false, sessions: [] });
+    expect(Date.now() - begun).toBeLessThan(3_000);
+    await slow.close();
+
+    const missing = new AcpSessionManager({ config: { acpAgents: [] }, onEvent: () => undefined });
+    await expect(missing.listProviderSessions("fake", workspace)).rejects.toMatchObject({ statusCode: 404 });
   });
 });

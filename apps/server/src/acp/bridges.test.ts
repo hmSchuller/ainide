@@ -17,7 +17,7 @@ function session(projectId: string): AcpSession {
     providerLabel: "Fake",
     authMethods: [],
     status: "live",
-    capabilities: { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
+    capabilities: { canCancel: true, canClose: false, canLoad: false, canList: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true },
     configOptions: [],
     availableCommands: [],
     pendingRequests: [],

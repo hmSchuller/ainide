@@ -156,6 +156,7 @@ export interface AcpSessionCapabilities {
   canCancel: boolean;
   canClose: boolean;
   canLoad: boolean;
+  canList: boolean;
   canResume: boolean;
   canSetConfig: boolean;
   canReadTextFile: boolean;
@@ -163,6 +164,23 @@ export interface AcpSessionCapabilities {
   canUseTerminal: boolean;
   canRequestPermission: boolean;
   canElicit: boolean;
+}
+
+export interface AcpProviderSessionSummary {
+  sessionId: string;
+  title?: string;
+  updatedAt?: string;
+}
+
+export interface AcpProviderSessionsResult {
+  available: boolean;
+  sessions: AcpProviderSessionSummary[];
+}
+
+export interface AcpSessionCreateRequest {
+  providerId: string;
+  title?: string;
+  acpSessionId?: string;
 }
 
 export interface AcpConfigOptionChoice {

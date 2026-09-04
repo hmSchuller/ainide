@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterAcpCommands, insertAcpCommand, matchAcpCommandToken, moveAcpCommandIndex } from "./acp-command-autocomplete";
+import { type AcpCommandSuggestion, filterAcpCommands, filterAcpSuggestions, insertAcpCommand, matchAcpCommandToken, moveAcpCommandIndex } from "./acp-command-autocomplete";
 
 const commands = [
   { name: "review", description: "Review changes" },
@@ -23,6 +23,22 @@ describe("ACP command autocomplete", () => {
     expect(filterAcpCommands(commands, "RE").map((command) => command.name)).toEqual(["review", "refactor"]);
     expect(filterAcpCommands(commands, "x")).toEqual([]);
     expect(filterAcpCommands([], "")).toEqual([]);
+  });
+
+  it("lists the client session command alongside matching provider commands", () => {
+    const suggestions = filterAcpSuggestions(commands, "");
+    expect(suggestions[0]).toEqual({ kind: "client", command: { kind: "new", name: "new", description: expect.any(String) } });
+    expect(suggestions.map((suggestion) => suggestion.command.name)).toEqual(["new", "review", "refactor", "ship"]);
+    expect(filterAcpSuggestions(commands, "RE").map((suggestion) => suggestion.command.name)).toEqual(["review", "refactor"]);
+    expect(filterAcpSuggestions(commands, "n").map((suggestion) => suggestion.command.name)).toEqual(["new"]);
+    expect(filterAcpSuggestions(commands, "sh").map((suggestion) => suggestion.kind)).toEqual(["provider"]);
+    expect(filterAcpSuggestions([], "x")).toEqual([]);
+  });
+
+  it("keeps client and provider suggestions distinguishable for execution vs insertion", () => {
+    const suggestions: AcpCommandSuggestion[] = filterAcpSuggestions([{ name: "new", description: "A provider command named new" }], "");
+    expect(suggestions.filter((suggestion) => suggestion.kind === "client")).toHaveLength(1);
+    expect(suggestions.filter((suggestion) => suggestion.kind === "provider")).toHaveLength(1);
   });
 
   it("wraps keyboard selection and leaves an empty list safely at zero", () => {

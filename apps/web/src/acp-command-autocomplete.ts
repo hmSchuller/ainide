@@ -11,6 +11,22 @@ export interface AcpCommandInsertion {
   caret: number;
 }
 
+export type AcpClientCommandKind = "new";
+
+export interface AcpClientCommand {
+  kind: AcpClientCommandKind;
+  name: string;
+  description: string;
+}
+
+export type AcpCommandSuggestion =
+  | { kind: "client"; command: AcpClientCommand }
+  | { kind: "provider"; command: AcpCommand };
+
+export const CLIENT_ACP_COMMANDS: readonly AcpClientCommand[] = [
+  { kind: "new", name: "new", description: "Start a fresh context on this provider" },
+];
+
 export function matchAcpCommandToken(text: string, caret: number): AcpCommandMatch | undefined {
   const position = Math.max(0, Math.min(caret, text.length));
   const beforeCaret = text.slice(0, position);
@@ -18,6 +34,15 @@ export function matchAcpCommandToken(text: string, caret: number): AcpCommandMat
   if (!match || match.index === undefined) return undefined;
   const start = match.index + (match[0].startsWith("/") ? 0 : 1);
   return { query: match[1] ?? "", start, end: position };
+}
+
+export function filterAcpSuggestions(commands: AcpCommand[], query: string): AcpCommandSuggestion[] {
+  const normalizedQuery = query.toLowerCase();
+  const matches = (name: string) => name.toLowerCase().startsWith(normalizedQuery);
+  return [
+    ...CLIENT_ACP_COMMANDS.filter((command) => matches(command.name)).map((command): AcpCommandSuggestion => ({ kind: "client", command })),
+    ...commands.filter((command) => matches(command.name)).map((command): AcpCommandSuggestion => ({ kind: "provider", command })),
+  ];
 }
 
 export function filterAcpCommands(commands: AcpCommand[], query: string): AcpCommand[] {

@@ -1,10 +1,11 @@
 import type { AcpActivity, AcpElicitationValue, AcpPendingRequest, AcpRequestResponse, AcpSession, FileEntry, TerminalSession } from "@ainide/shared";
 import { useEffect, useRef, useState } from "react";
-import { filterAcpCommands, insertAcpCommand, matchAcpCommandToken, moveAcpCommandIndex } from "../acp-command-autocomplete";
+import { type AcpCommandSuggestion, filterAcpSuggestions, insertAcpCommand, matchAcpCommandToken, moveAcpCommandIndex } from "../acp-command-autocomplete";
 import { ACP_SEND_LABEL, acpComposerKeyAction, dispatchAcpPrompt } from "../acp-composer";
 import { filterAcpFiles, insertAcpFile, matchAcpFileToken, moveAcpFileIndex } from "../acp-file-autocomplete";
 import { initialAcpHistoryFollowState, resumedAcpHistoryFollowState, stateAfterAcpHistoryActivity, stateAfterAcpHistoryScroll } from "../acp-history-scroll";
-import { authenticateAcpSession, cancelAcpSession, closeAcpSession, closeTerminal, promptAcpSession, readFile, renameAcpSession, renameTerminal, respondToAcpRequest, searchFiles, setAcpConfigOption } from "../api";
+import { dispatchAcpRollover } from "../acp-rollover";
+import { authenticateAcpSession, cancelAcpSession, closeAcpSession, closeTerminal, promptAcpSession, readFile, renameAcpSession, renameTerminal, respondToAcpRequest, rolloverAcpSession, searchFiles, setAcpConfigOption } from "../api";
 import { language } from "../file-language";
 import type { AcpPromptDraft } from "../project-ui";
 import { captureMentionedFileReference, removeGeneratedReferenceMention } from "../references";
@@ -142,7 +143,7 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
   const loadedWorkspaceFiles = Object.values(directories).flatMap((directory) => directory.entries);
   const commandMatch = matchAcpCommandToken(draft.text, Math.min(caret, draft.text.length));
   const fileMatch = matchAcpFileToken(draft.text, Math.min(caret, draft.text.length));
-  const commandSuggestions = commandMatch && !fileMatch ? filterAcpCommands(session.availableCommands, commandMatch.query) : [];
+  const commandSuggestions = commandMatch && !fileMatch ? filterAcpSuggestions(session.availableCommands, commandMatch.query) : [];
   const commandListId = `acp-command-list-${session.id}`;
   const fileListId = `acp-file-list-${session.id}`;
   const completionCount = fileMatch ? fileSuggestions.length : commandSuggestions.length;
@@ -223,11 +224,30 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
   }, [history]);
 
   const selectCommand = (commandIndex: number) => {
-    if (!commandMatch || !commandSuggestions[commandIndex]) return;
-    const insertion = insertAcpCommand(draft.text, commandMatch, commandSuggestions[commandIndex]);
+    if (!commandMatch) return;
+    const suggestion: AcpCommandSuggestion | undefined = commandSuggestions[commandIndex];
+    if (!suggestion) return;
+    setCompletionDismissed(true);
+    if (suggestion.kind === "client") {
+      const currentSession = useAppStore.getState().acpSessions.find((candidate) => candidate.id === session.id) ?? session;
+      const store = useAppStore.getState();
+      dispatchAcpRollover({
+        activePrompt: currentSession.activePrompt,
+        authRequired: currentSession.status === "auth_required",
+        live: currentSession.status === "live",
+        dispatch: () => rolloverAcpSession(session.id, token),
+        clearDraft: () => store.clearAcpDraft(session.id),
+        getCurrentDraft: () => useAppStore.getState().acpDrafts[session.id] ?? EMPTY_DRAFT,
+        restoreDraft: (restored) => useAppStore.getState().setAcpDraft(session.id, restored),
+        adoptSession: (updated) => useAppStore.getState().applyAcpRollover(updated),
+        notifyFailure: (error) => useAppStore.getState().setNotice(error instanceof Error ? error.message : "Could not start a new context", "error"),
+      });
+      window.setTimeout(() => textareaRef.current?.focus(), 0);
+      return;
+    }
+    const insertion = insertAcpCommand(draft.text, commandMatch, suggestion.command);
     updateAcpDraft(session.id, { text: insertion.text });
     setCurrentCaret(insertion.caret);
-    setCompletionDismissed(true);
     window.setTimeout(() => {
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(insertion.caret, insertion.caret);
@@ -331,7 +351,7 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
         if (action === "select-command") { event.preventDefault(); if (fileMatch) void selectFile(activeCompletionIndex); else selectCommand(activeCompletionIndex); return; }
         if (action === "dismiss-completion") { event.preventDefault(); fileSelectionGenerationRef.current += 1; setCompletionDismissed(true); return; }
         if (action === "submit") { if (pendingFileReadsRef.current.size > 0) event.preventDefault(); else if (submit()) event.preventDefault(); }
-      }} />{completionOpen && fileMatch ? <div id={fileListId} className="acp-command-suggestions acp-file-suggestions" role="listbox" aria-label="Workspace files">{fileSuggestions.map((file, index) => <button id={`${fileListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={index === activeCompletionIndex ? "active" : ""} key={file.path} onMouseDown={(event) => event.preventDefault()} onClick={() => void selectFile(index)}><span><strong>@{file.path}</strong><small>Disk file</small></span></button>)}</div> : completionOpen ? <div id={commandListId} className="acp-command-suggestions" role="listbox" aria-label="Provider commands">{commandSuggestions.map((command, index) => <button id={`${commandListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={index === activeCompletionIndex ? "active" : ""} key={command.name} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(index)}><span><strong>/{command.name}</strong>{command.description && <small>{command.description}</small>}</span>{command.inputHint && <em>{command.inputHint}</em>}</button>)}</div> : null}</div>      {/* Layout container naming an attachment group; a fieldset would change layout semantics */}
+      }} />{completionOpen && fileMatch ? <div id={fileListId} className="acp-command-suggestions acp-file-suggestions" role="listbox" aria-label="Workspace files">{fileSuggestions.map((file, index) => <button id={`${fileListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={index === activeCompletionIndex ? "active" : ""} key={file.path} onMouseDown={(event) => event.preventDefault()} onClick={() => void selectFile(index)}><span><strong>@{file.path}</strong><small>Disk file</small></span></button>)}</div> : completionOpen ? <div id={commandListId} className="acp-command-suggestions" role="listbox" aria-label="Session commands">{commandSuggestions.map((suggestion, index) => suggestion.kind === "client" ? <button id={`${commandListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={`acp-command-client ${index === activeCompletionIndex ? "active" : ""}`} key={`client-${suggestion.command.name}`} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(index)}><span><strong>/{suggestion.command.name}</strong><small>{suggestion.command.description}</small></span><em>session</em></button> : <button id={`${commandListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={index === activeCompletionIndex ? "active" : ""} key={suggestion.command.name} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(index)}><span><strong>/{suggestion.command.name}</strong>{suggestion.command.description && <small>{suggestion.command.description}</small>}</span>{suggestion.command.inputHint && <em>{suggestion.command.inputHint}</em>}</button>)}</div> : null}</div>      {/* Layout container naming an attachment group; a fieldset would change layout semantics */}
       {/* biome-ignore lint/a11y/useSemanticElements: grouped attachments, not a form field group */}
       {draft.references.length > 0 && <div className="acp-draft-attachments" role="group" aria-label="ACP draft attachments">{draft.references.map((reference) => <div className="acp-draft-attachment" key={reference.id}><span><strong>{reference.path}</strong><small>{reference.wholeFile ? "whole file" : `lines ${reference.startLine}-${reference.endLine}`} · {reference.content.length.toLocaleString()} chars{reference.mention ? " · disk snapshot" : ""}</small></span><button type="button" onClick={() => removeDraftReference(reference.id)} aria-label={`Remove ${reference.path} from draft`}>×</button></div>)}</div>}<div className="acp-composer-footer"><span>{draft.references.length ? `${draft.references.length} reference${draft.references.length === 1 ? "" : "s"} attached` : "References can be attached from the dock"}</span><div>{session.activePrompt ? <button type="button" onClick={() => void cancel()}>Cancel turn</button> : <button type="button" className="primary-button compact" onClick={() => void submit()} disabled={!draft.text.trim() && !draft.references.length}>{ACP_SEND_LABEL}</button>}</div></div></div>
    </div>;

@@ -21,7 +21,7 @@ import { ACP_SEND_LABEL } from "../acp-composer";
 import { useAppStore } from "../store";
 import { ActivityView, AgentWorkbench, combinedAgentEntries } from "./AgentWorkbench";
 
-const capabilities = { canCancel: true, canClose: false, canLoad: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true };
+const capabilities = { canCancel: true, canClose: false, canLoad: false, canList: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true };
 
 describe("AgentWorkbench", () => {
   it("combines mixed PTY and ACP sessions only for the active project", () => {

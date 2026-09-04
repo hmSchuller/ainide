@@ -13,6 +13,7 @@ const props = {
   loading: false,
   onRetry: () => undefined,
   onSelect: () => undefined,
+  onRecentSelect: () => undefined,
   onClose: () => undefined,
 };
 
@@ -44,5 +45,52 @@ describe("AcpProviderPicker", () => {
     const markup = renderToStaticMarkup(<AcpProviderPicker {...props} disabled={["cursor", "opencode"]} />);
     expect(markup).toContain("No ACP providers available for this project");
     expect(markup).not.toContain("No ACP providers configured");
+  });
+
+  it("collapses recent sessions by default with a counted toggle and no rows", () => {
+    const markup = renderToStaticMarkup(<AcpProviderPicker {...props} recentSessions={{ opencode: { status: "available", sessions: [{ sessionId: "s-1", title: "Refactor the parser", updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() }, { sessionId: "s-2" }] } }} />);
+    expect(markup).toContain("Start a new session");
+    expect(markup).toContain("Recent sessions (2)");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("Cancel");
+    expect(markup).not.toContain("Refactor the parser");
+    expect(markup).not.toContain("Untitled provider session");
+  });
+
+  it("expands a provider's recents with titles and recency while keeping resume entries", () => {
+    const markup = renderToStaticMarkup(<AcpProviderPicker {...props} initialExpandedProviders={["opencode"]} recentSessions={{ opencode: { status: "available", sessions: [{ sessionId: "s-1", title: "Refactor the parser", updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() }, { sessionId: "s-2" }] } }} />);
+    expect(markup).toContain("Start a new session");
+    expect(markup).toContain('aria-expanded="true"');
+    expect(markup).toContain("Refactor the parser");
+    expect(markup).toContain("5m ago");
+    expect(markup).toContain("Untitled provider session");
+  });
+
+  it("expands providers independently", () => {
+    const markup = renderToStaticMarkup(<AcpProviderPicker {...props} initialExpandedProviders={["opencode"]} recentSessions={{ opencode: { status: "available", sessions: [{ sessionId: "s-1", title: "Refactor the parser" }] }, cursor: { status: "available", sessions: [{ sessionId: "c-1", title: "Cursor work" }] } }} />);
+    expect(markup).toContain("Refactor the parser");
+    expect(markup).not.toContain("Cursor work");
+    expect(markup).toContain("Recent sessions (1)");
+  });
+
+  it("starts collapsed on every fresh open", () => {
+    const expanded = renderToStaticMarkup(<AcpProviderPicker {...props} initialExpandedProviders={["opencode"]} recentSessions={{ opencode: { status: "available", sessions: [{ sessionId: "s-1", title: "Refactor the parser" }] } }} />);
+    expect(expanded).toContain("Refactor the parser");
+    const reopened = renderToStaticMarkup(<AcpProviderPicker {...props} recentSessions={{ opencode: { status: "available", sessions: [{ sessionId: "s-1", title: "Refactor the parser" }] } }} />);
+    expect(reopened).toContain('aria-expanded="false"');
+    expect(reopened).not.toContain("Refactor the parser");
+  });
+
+  it("renders a muted empty state for providers without resumable sessions", () => {
+    const markup = renderToStaticMarkup(<AcpProviderPicker {...props} recentSessions={{ opencode: { status: "empty", sessions: [] }, cursor: { status: "loading", sessions: [] } }} />);
+    expect(markup).toContain("No resumable sessions in this workspace");
+    expect(markup).toContain("Checking recent sessions...");
+  });
+
+  it("renders the unavailable state without dropping the start-new entry", () => {
+    const markup = renderToStaticMarkup(<AcpProviderPicker {...props} recentSessions={{ opencode: { status: "unavailable", sessions: [] } }} />);
+    expect(markup).toContain("Resuming is unavailable for OpenCode");
+    expect(markup).toContain("Start a new session");
+    expect(markup).not.toContain("Resuming is unavailable for Cursor");
   });
 });

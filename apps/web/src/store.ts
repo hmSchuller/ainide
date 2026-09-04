@@ -1,6 +1,7 @@
-import type { AcpActivity, AcpServerEvent, AcpSession, BuildCommand, FileEntry, GitFileComparison, GitStatus, ProjectRef, TerminalSession, VersionInfo, Workspace } from "@ainide/shared";
+import type { AcpActivity, AcpProviderSessionSummary, AcpServerEvent, AcpSession, BuildCommand, FileEntry, GitFileComparison, GitStatus, ProjectRef, TerminalSession, VersionInfo, Workspace } from "@ainide/shared";
 import { create } from "zustand";
 import { type AcpClientState, applyAcpServerEvent } from "./acp-state";
+import { getAcpProviderSessions } from "./api";
 import { persistBuildSelection, readBuildSelections } from "./build-selections";
 import { language } from "./file-language";
 import { persistTerminalCollapsed, readTerminalCollapsedPreference } from "./layout-prefs";
@@ -34,6 +35,7 @@ interface AppState {
   acpDrafts: Record<string, AcpPromptDraft>;
   acpSequences: Record<string, number>;
   acpQueued: AcpClientState["queued"];
+  recentAcpSessions: Record<string, AcpRecentSessionsState>;
   activeTerminalId?: string;
   referenceKit: ReferenceItem[];
   focusedSessionId?: string;
@@ -72,6 +74,10 @@ interface AppState {
   setTerminals: (terminals: TerminalSession[]) => void;
   setAcpSessions: (sessions: AcpSession[]) => void;
   addAcpSession: (session: AcpSession) => void;
+  applyAcpRollover: (session: AcpSession) => void;
+  fetchAcpProviderSessions: (providerId: string) => Promise<void>;
+  setRecentAcpSessions: (providerId: string, state: AcpRecentSessionsStateInput) => void;
+  clearRecentAcpSessions: () => void;
   updateAcpSession: (id: string, update: Partial<AcpSession>) => void;
   applyAcpEvent: (event: AcpServerEvent) => void;
   setAcpDraft: (id: string, draft: AcpPromptDraft) => void;
@@ -124,6 +130,25 @@ function paneWith(panes: Record<EditorPaneId, EditorPaneState>, paneId: EditorPa
 
 let nextGitComparisonRequestId = 0;
 
+export type AcpRecentSessionsState =
+  | { status: "loading"; sessions: [] }
+  | { status: "available"; sessions: AcpProviderSessionSummary[] }
+  | { status: "empty"; sessions: [] }
+  | { status: "unavailable"; sessions: [] };
+
+export type AcpRecentSessionsStateInput =
+  | { status: "loading" }
+  | { status: "available"; sessions: AcpProviderSessionSummary[] }
+  | { status: "empty" }
+  | { status: "unavailable" };
+
+export function recentSessionsState(input: AcpRecentSessionsStateInput): AcpRecentSessionsState {
+  if (input.status === "available") return input.sessions.length ? input : { status: "empty", sessions: [] };
+  if (input.status === "loading") return { status: "loading", sessions: [] };
+  if (input.status === "unavailable") return { status: "unavailable", sessions: [] };
+  return { status: "empty", sessions: [] };
+}
+
 export function gitComparisonKey(projectId: string, path: string, head?: string): string {
   return JSON.stringify([projectId, path, head]);
 }
@@ -153,6 +178,7 @@ export const useAppStore = create<AppState>((set) => ({
   acpDrafts: {},
   acpSequences: {},
   acpQueued: {},
+  recentAcpSessions: {},
   referenceKit: [],
   terminalCollapsed: readTerminalCollapsedPreference(),
   terminalMaximized: false,
@@ -308,6 +334,30 @@ export const useAppStore = create<AppState>((set) => ({
     return { acpSessions };
   }),
   updateAcpSession: (id, update) => set((current) => ({ acpSessions: current.acpSessions.map((session) => session.id === id ? { ...session, ...update } : session) })),
+  applyAcpRollover: (session) => set((current) => {
+    if (!current.acpSessions.some((candidate) => candidate.id === session.id)) return current;
+    const acpHistory = { ...current.acpHistory };
+    delete acpHistory[session.id];
+    return { acpSessions: current.acpSessions.map((candidate) => (candidate.id === session.id ? session : candidate)), acpHistory };
+  }),
+  setRecentAcpSessions: (providerId, state) => set((current) => ({ recentAcpSessions: { ...current.recentAcpSessions, [providerId]: recentSessionsState(state) } })),
+  clearRecentAcpSessions: () => set({ recentAcpSessions: {} }),
+  fetchAcpProviderSessions: async (providerId) => {
+    const store = useAppStore;
+    const state = store.getState();
+    if (!state.token) return;
+    if (state.recentAcpSessions[providerId]?.status === "loading") return;
+    store.getState().setRecentAcpSessions(providerId, { status: "loading" });
+    const projectId = store.getState().activeProjectId;
+    try {
+      const result = await getAcpProviderSessions(providerId, store.getState().token);
+      if (store.getState().activeProjectId !== projectId) return;
+      store.getState().setRecentAcpSessions(providerId, result.available ? { status: "available", sessions: result.sessions } : { status: "unavailable" });
+    } catch {
+      if (store.getState().activeProjectId !== projectId) return;
+      store.getState().setRecentAcpSessions(providerId, { status: "unavailable" });
+    }
+  },
   applyAcpEvent: (event) => set((current) => {
     const next = applyAcpServerEvent({
       projectId: current.activeProjectId,
@@ -377,7 +427,7 @@ export const useAppStore = create<AppState>((set) => ({
     openProjects: input.openProjects,
     knownProjects: input.knownProjects,
     restoreError: input.restoreError,
-    ...(current.activeProjectId !== input.activeProjectId ? { acpHistory: {}, acpSequences: {}, acpQueued: {}, gitComparisons: {} } : {}),
+    ...(current.activeProjectId !== input.activeProjectId ? { acpHistory: {}, acpSequences: {}, acpQueued: {}, gitComparisons: {}, recentAcpSessions: {} } : {}),
   })),
   stashActiveBag: () => set((current) => {
     if (!current.activeProjectId) return current;
@@ -423,6 +473,7 @@ export const useAppStore = create<AppState>((set) => ({
     acpSequences: {},
     acpQueued: {},
     gitComparisons: {},
+    recentAcpSessions: {},
   }),
   removeProjectBag: (projectId) => set((current) => {
     const projectBags = { ...current.projectBags };

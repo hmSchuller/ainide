@@ -2,6 +2,7 @@ import type {
   AcpConfigOption,
   AcpPromptRequest,
   AcpProviderDescriptor,
+  AcpProviderSessionsResult,
   AcpRequestResponse,
   AcpServerEvent,
   AcpSession,
@@ -242,6 +243,10 @@ export async function getAcpProviders(token: string): Promise<AcpProviderDescrip
   return request<AcpProviderDescriptor[]>("/api/acp/providers", token);
 }
 
+export async function getAcpProviderSessions(providerId: string, token: string): Promise<AcpProviderSessionsResult> {
+  return request<AcpProviderSessionsResult>(`/api/acp/providers/${encodeURIComponent(providerId)}/sessions`, token);
+}
+
 export async function getProjectAgentSettings(token: string, projectId?: string): Promise<ProjectAgentSettings> {
   const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
   return request<ProjectAgentSettings>(`/api/project/agents${query}`, token);
@@ -275,8 +280,19 @@ export async function getAcpSession(id: string, token: string): Promise<AcpSessi
   return request<AcpSessionDetail>(`/api/acp/sessions/${encodeURIComponent(id)}`, token);
 }
 
-export async function createAcpSession(providerId: string, token: string, title?: string): Promise<AcpSession> {
-  return request<AcpSession>("/api/acp/sessions", token, { method: "POST", body: JSON.stringify({ providerId, ...(title ? { title } : {}) }) });
+export async function createAcpSession(providerId: string, token: string, options: { title?: string; acpSessionId?: string } = {}): Promise<AcpSession> {
+  return request<AcpSession>("/api/acp/sessions", token, {
+    method: "POST",
+    body: JSON.stringify({
+      providerId,
+      ...(options.title ? { title: options.title } : {}),
+      ...(options.acpSessionId ? { acpSessionId: options.acpSessionId } : {}),
+    }),
+  });
+}
+
+export async function rolloverAcpSession(id: string, token: string): Promise<AcpSession> {
+  return request<AcpSession>(`/api/acp/sessions/${encodeURIComponent(id)}/new`, token, { method: "POST" });
 }
 
 export async function promptAcpSession(id: string, prompt: AcpPromptRequest, token: string): Promise<void> {

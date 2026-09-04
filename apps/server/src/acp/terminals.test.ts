@@ -19,6 +19,7 @@ function session(id: string, rootPath: string): AcpSession {
       canCancel: true,
       canClose: false,
       canLoad: false,
+      canList: false,
       canResume: false,
       canSetConfig: false,
       canReadTextFile: true,
