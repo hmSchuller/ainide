@@ -1,22 +1,25 @@
-import type { AcpActivity, AcpElicitationValue, AcpPendingRequest, AcpRequestResponse, AcpSession, FileEntry, TerminalSession } from "@ainide/shared";
+import type { AcpActivity, AcpElicitationValue, AcpPendingRequest, AcpRequestResponse, AcpSession, AcpSubagent, FileEntry, TerminalSession } from "@ainide/shared";
 import { useEffect, useRef, useState } from "react";
 import { type AcpCommandSuggestion, filterAcpSuggestions, insertAcpCommand, matchAcpCommandToken, moveAcpCommandIndex } from "../acp-command-autocomplete";
-import { ACP_SEND_LABEL, acpComposerKeyAction, dispatchAcpPrompt } from "../acp-composer";
+import { ACP_SEND_LABEL, type AcpQueuedPrompt, acpComposerKeyAction, acpComposerState, canDispatchAcpPrompt, dispatchAcpPrompt, enqueueAcpPrompt, moveQueuedAcpPrompt, removeQueuedAcpPrompt } from "../acp-composer";
 import { filterAcpFiles, insertAcpFile, matchAcpFileToken, moveAcpFileIndex } from "../acp-file-autocomplete";
 import { initialAcpHistoryFollowState, resumedAcpHistoryFollowState, stateAfterAcpHistoryActivity, stateAfterAcpHistoryScroll } from "../acp-history-scroll";
-import { dispatchAcpRollover } from "../acp-rollover";
-import { authenticateAcpSession, cancelAcpSession, closeAcpSession, closeTerminal, promptAcpSession, readFile, renameAcpSession, renameTerminal, respondToAcpRequest, rolloverAcpSession, searchFiles, setAcpConfigOption } from "../api";
+import { dispatchAcpRecovery, dispatchAcpRollover, freshAcpSessionTitle } from "../acp-rollover";
+import { authenticateAcpSession, cancelAcpSession, closeAcpSession, closeTerminal, createAcpSession, promptAcpSession, readFile, renameAcpSession, renameTerminal, respondToAcpRequest, rolloverAcpSession, searchFiles, setAcpConfigOption } from "../api";
 import { language } from "../file-language";
+import type { AgentReferenceLocation } from "../inspection-navigation";
 import type { AcpPromptDraft } from "../project-ui";
 import { captureMentionedFileReference, removeGeneratedReferenceMention } from "../references";
 import { useAppStore } from "../store";
 import { agentTerminals } from "../terminal-ownership";
-import { MarkdownMessage } from "./MarkdownMessage";
+import { AcpActivityView } from "./AcpActivityView";
+import { AcpTurnNarrative } from "./AcpTurnNarrative";
 import { TerminalView } from "./TerminalPanel";
 
 interface AgentWorkbenchProps {
   onNewAgent: () => void;
-  onOpenReference: (path: string, line: number, column?: number) => void;
+  onOpenReference: (path: string, line: number, column?: number, source?: AgentReferenceLocation) => void;
+  onOpenDiff?: (path?: string, source?: AgentReferenceLocation) => void;
 }
 
 export type AgentEntry =
@@ -25,6 +28,12 @@ export type AgentEntry =
 
 const EMPTY_DRAFT: AcpPromptDraft = { text: "", references: [] };
 const EMPTY_HISTORY: AcpActivity[] = [];
+const historyFollowBySession = new Map<string, ReturnType<typeof initialAcpHistoryFollowState>>();
+
+export function moveRovingIndex(index: number, direction: -1 | 1, length: number): number {
+  if (length < 1) return -1;
+  return (index + direction + length) % length;
+}
 
 function isLive(entry: AgentEntry): boolean {
   return entry.kind === "pty" ? entry.session.alive : entry.session.status === "live" || entry.session.status === "waiting";
@@ -42,24 +51,16 @@ export function combinedAgentEntries(terminals: TerminalSession[], acpSessions: 
 }
 
 function SessionStatus({ entry }: { entry: AgentEntry }) {
-  const label = entry.kind === "pty" ? (entry.session.alive ? "live" : "exited") : entry.session.status.replaceAll("_", " ");
-  return <span className={`agent-status ${entry.kind === "pty" ? (entry.session.alive ? "live" : "exited") : entry.session.status === "live" ? "live" : ""}`}><i />{label}</span>;
+  const status = entry.kind === "pty" ? (entry.session.alive ? "live" : "exited") : entry.session.status.replaceAll("_", " ");
+  return <span className={`agent-status ${status === "live" ? "live" : status === "reconnecting" ? "reconnecting" : status === "exited" ? "exited" : ""}`}><i />{status}</span>;
 }
 
-export function ActivityView({ activity, onOpenReference }: { activity: AcpActivity; onOpenReference: AgentWorkbenchProps["onOpenReference"] }) {
-  if (activity.type === "message") {
-    if (activity.thought) return <details className="acp-thought"><summary><span className="acp-activity-label">thinking</span></summary><MarkdownMessage source={activity.text} /></details>;
-    return <div className={`acp-message ${activity.role}`}><span className="acp-activity-label">{activity.role}</span><MarkdownMessage source={activity.text} /></div>;
-  }
-  if (activity.type === "tool_call") return <details className={`acp-tool ${activity.status}`} open={activity.status === "running"}><summary><span>{activity.title}</span><small>{activity.status}</small></summary>{activity.input && <pre>{activity.input}</pre>}{activity.output && <pre>{activity.output}</pre>}</details>;
-  if (activity.type === "plan") return <div className="acp-plan"><span className="acp-activity-label">plan{activity.status ? ` · ${activity.status}` : ""}</span><p>{activity.text}</p></div>;
-  if (activity.type === "location") return <button type="button" className="acp-location" onClick={() => onOpenReference(activity.path, activity.line ?? 1, activity.column)}>Open {activity.path}{activity.line ? `:${activity.line}` : ""}</button>;
-  if (activity.type === "diff") return <details className="acp-diff"><summary>Diff{activity.path ? ` · ${activity.path}` : ""}</summary><pre>{activity.diff}</pre></details>;
-  if (activity.type === "terminal") return <details className="acp-terminal-activity"><summary>Terminal {activity.status ?? "output"}</summary><pre>{activity.output ?? "No output retained"}</pre></details>;
-  if (activity.type === "usage") return <small className="acp-usage">Usage: {activity.totalTokens ?? "?"} tokens</small>;
-  if (activity.type === "turn") return <div className={`acp-turn ${activity.status}`}>{activity.status}{activity.message ? ` · ${activity.message}` : ""}</div>;
-  return <details className="acp-unknown"><summary>Unknown provider activity · {activity.name}</summary><pre>{JSON.stringify(activity.data, null, 2)}</pre></details>;
+export function SubagentList({ subagents }: { subagents?: readonly AcpSubagent[] }) {
+  if (!subagents?.length) return null;
+  return <section className="acp-subagents" aria-label="Provider-reported subordinate activity"><header><span className="acp-activity-label">Subordinate activity</span><small>Reported by provider · no controls</small></header><ul>{subagents.map((subagent) => <li key={`${subagent.providerId}\u0000${subagent.id}`}><span className="acp-subagent-identity"><strong>{subagent.name ?? subagent.role ?? subagent.providerId}</strong>{subagent.role && subagent.name && <small>{subagent.role}</small>}</span>{subagent.activity && <span className="acp-subagent-activity">{subagent.activity}</span>}{subagent.state && <span className="acp-subagent-state">{subagent.state}</span>}</li>)}</ul></section>;
 }
+
+export const ActivityView = AcpActivityView;
 
 function ConfigControls({ session }: { session: AcpSession }) {
   const token = useAppStore((state) => state.token);
@@ -90,7 +91,7 @@ function AuthPanel({ session }: { session: AcpSession }) {
     try { updateAcpSession(session.id, await authenticateAcpSession(session.id, methodId, token)); }
     catch (error) { setNotice(error instanceof Error ? error.message : "Provider authentication failed", "error"); }
   };
-  return <div className="acp-auth" role="status"><strong>Authentication required</strong><span>{session.error ?? "Authenticate this provider before prompting."}</span><div>{session.authMethods.map((method) => method.type === "agent" ? <button type="button" key={method.id} onClick={() => void authenticate(method.id)}>{method.label}</button> : <span key={method.id} className="acp-auth-terminal">{method.label}: use the provider's terminal login flow</span>)}</div></div>;
+  return <div className="acp-auth" role="alert" aria-label={`Authentication required for ${session.title}`}><strong>Authentication required</strong><span>Provider: {session.providerLabel}</span><span>{session.error ?? "Authenticate this provider before prompting."}</span><div>{session.authMethods.map((method) => method.type === "agent" ? <button type="button" key={method.id} onClick={() => void authenticate(method.id)}>{method.label}{method.description ? ` · ${method.description}` : ""}</button> : <span key={method.id} className="acp-auth-terminal">{method.label}: use the provider's terminal login flow</span>)}</div><small>Authentication is provider-owned; ainide never collects credentials.</small></div>;
 }
 
 function ElicitationForm({ session, request }: { session: AcpSession; request: Extract<AcpPendingRequest, { type: "elicitation" }> }) {
@@ -103,7 +104,7 @@ function ElicitationForm({ session, request }: { session: AcpSession; request: E
   };
   const valid = request.request.fields.every((field) => !field.required || (values[field.id] !== undefined && values[field.id] !== ""));
   const titleId = `elicitation-title-${request.request.requestId}`;
-  return <fieldset className="acp-request acp-elicitation" role="dialog" aria-labelledby={titleId}><legend id={titleId}>{request.request.title}</legend>{request.request.description && <p>{request.request.description}</p>}{request.request.fields.map((field) => { const controlId = `elicitation-field-${request.request.requestId}-${field.id}`; return <label key={field.id} htmlFor={controlId}><span>{field.label}{field.required ? " *" : ""}</span>{field.type === "boolean" ? <input id={controlId} type="checkbox" checked={values[field.id] === true} onChange={(event) => setValues((current) => ({ ...current, [field.id]: event.target.checked }))} /> : field.type === "select" ? <select id={controlId} value={typeof values[field.id] === "string" ? values[field.id] as string : ""} onChange={(event) => setValues((current) => ({ ...current, [field.id]: event.target.value }))}><option value="">Select</option>{(field.choices ?? []).map((choice) => <option value={choice.value} key={choice.value}>{choice.label}</option>)}</select> : <input id={controlId} type={field.type === "number" ? "number" : "text"} value={values[field.id] === undefined ? "" : String(values[field.id])} onChange={(event) => setValues((current) => ({ ...current, [field.id]: field.type === "number" ? Number(event.target.value) : event.target.value }))} />}</label>; })}<div className="acp-request-actions"><button type="button" className="primary-button compact" disabled={!valid} onClick={() => void respond({ action: "accept", content: values })}>Submit</button><button type="button" onClick={() => void respond({ action: "decline" })}>Decline</button><button type="button" onClick={() => void respond({ action: "cancel" })}>Cancel</button></div></fieldset>;
+  return <fieldset className="acp-request acp-elicitation" role="dialog" aria-labelledby={titleId}><legend id={titleId}>Input required · {request.request.title}</legend><p className="acp-request-note">Only this session is waiting. No value is submitted automatically.</p>{request.request.description && <p>{request.request.description}</p>}{request.request.fields.map((field) => { const controlId = `elicitation-field-${request.request.requestId}-${field.id}`; return <label key={field.id} htmlFor={controlId}><span>{field.label}{field.required ? " *" : ""}</span>{field.type === "boolean" ? <input id={controlId} type="checkbox" checked={values[field.id] === true} onChange={(event) => setValues((current) => ({ ...current, [field.id]: event.target.checked }))} /> : field.type === "select" ? <select id={controlId} value={typeof values[field.id] === "string" ? values[field.id] as string : ""} onChange={(event) => setValues((current) => ({ ...current, [field.id]: event.target.value }))}><option value="">Select</option>{(field.choices ?? []).map((choice) => <option value={choice.value} key={choice.value}>{choice.label}</option>)}</select> : <input id={controlId} type={field.type === "number" ? "number" : "text"} value={values[field.id] === undefined ? "" : String(values[field.id])} onChange={(event) => setValues((current) => ({ ...current, [field.id]: field.type === "number" ? Number(event.target.value) : event.target.value }))} />}</label>; })}<div className="acp-request-actions"><button type="button" className="primary-button compact" disabled={!valid} onClick={() => void respond({ action: "accept", content: values })}>Submit</button><button type="button" onClick={() => void respond({ action: "decline" })}>Decline</button><button type="button" onClick={() => void respond({ action: "cancel" })}>Cancel</button></div></fieldset>;
 }
 
 function PendingRequest({ session, request }: { session: AcpSession; request: AcpPendingRequest }) {
@@ -115,10 +116,10 @@ function PendingRequest({ session, request }: { session: AcpSession; request: Ac
   };
   if (request.type === "elicitation") return <ElicitationForm session={session} request={request} />;
   const titleId = `permission-title-${request.request.requestId}`;
-  return <fieldset className="acp-request acp-permission" role="dialog" aria-labelledby={titleId}><legend id={titleId}>{request.request.title}</legend>{request.request.description && <p>{request.request.description}</p>}<div className="acp-request-actions">{request.request.options.map((option) => <button type="button" className="primary-button compact" key={option.id} onClick={() => void respond({ outcome: "selected", optionId: option.id })}>{option.label}</button>)}<button type="button" onClick={() => void respond({ outcome: "cancelled" })}>Reject</button></div></fieldset>;
+  return <fieldset className="acp-request acp-permission" role="dialog" aria-labelledby={titleId}><legend id={titleId}>Permission required · {request.request.title}</legend><p className="acp-request-note">This provider operation is paused for your decision. Nothing is approved automatically.</p>{request.request.description && <p>{request.request.description}</p>}<div className="acp-request-actions">{request.request.options.map((option) => <button type="button" className="primary-button compact" key={option.id} onClick={() => void respond({ outcome: "selected", optionId: option.id })}>{option.label}</button>)}<button type="button" onClick={() => void respond({ outcome: "cancelled" })}>Reject</button></div></fieldset>;
 }
 
-function AcpConversation({ session, onOpenReference }: { session: AcpSession; onOpenReference: AgentWorkbenchProps["onOpenReference"] }) {
+export function AcpConversation({ session, onOpenReference, onOpenDiff }: { session: AcpSession; onOpenReference: AgentWorkbenchProps["onOpenReference"]; onOpenDiff?: AgentWorkbenchProps["onOpenDiff"] }) {
   const token = useAppStore((state) => state.token);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const directories = useAppStore((state) => state.directories);
@@ -139,7 +140,8 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
   const [completionDismissed, setCompletionDismissed] = useState(false);
   const [fileSuggestions, setFileSuggestions] = useState<FileEntry[]>([]);
   const [fileReadPending, setFileReadPending] = useState(false);
-  const [historyFollowState, setHistoryFollowState] = useState(initialAcpHistoryFollowState);
+  const [historyFollowState, setHistoryFollowState] = useState(() => historyFollowBySession.get(session.id) ?? initialAcpHistoryFollowState());
+  const [queuedPrompts, setQueuedPrompts] = useState<AcpQueuedPrompt[]>([]);
   const loadedWorkspaceFiles = Object.values(directories).flatMap((directory) => directory.entries);
   const commandMatch = matchAcpCommandToken(draft.text, Math.min(caret, draft.text.length));
   const fileMatch = matchAcpFileToken(draft.text, Math.min(caret, draft.text.length));
@@ -219,10 +221,28 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
     setHistoryFollowState((current) => {
       const transition = stateAfterAcpHistoryActivity(current);
       if (transition.shouldScroll) element.scrollTop = element.scrollHeight;
+      historyFollowBySession.set(session.id, transition.state);
       return transition.state;
     });
   }, [history]);
 
+  const recover = () => {
+    const currentState = useAppStore.getState();
+    if (currentState.activeProjectId !== session.projectId) {
+      currentState.setNotice("The session's project is no longer active", "error");
+      return;
+    }
+    void dispatchAcpRecovery({
+      dispatch: async () => {
+        const created = await createAcpSession(session.providerId, token, { title: freshAcpSessionTitle(session.title) });
+        if (created.projectId !== session.projectId) throw new Error("Fresh ACP session belongs to a different project");
+        return created;
+      },
+      addSession: (created) => useAppStore.getState().addAcpSession(created),
+      focusSession: (sessionId) => useAppStore.getState().setFocusedSession(sessionId),
+      notifyFailure: (error) => useAppStore.getState().setNotice(error instanceof Error ? error.message : "Could not start a fresh ACP session", "error"),
+    });
+  };
   const selectCommand = (commandIndex: number) => {
     if (!commandMatch) return;
     const suggestion: AcpCommandSuggestion | undefined = commandSuggestions[commandIndex];
@@ -230,6 +250,10 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
     setCompletionDismissed(true);
     if (suggestion.kind === "client") {
       const currentSession = useAppStore.getState().acpSessions.find((candidate) => candidate.id === session.id) ?? session;
+      if (currentSession.status === "failed" || currentSession.status === "exited" || currentSession.status === "disconnected" || currentSession.status === "non_resumable") {
+        recover();
+        return;
+      }
       const store = useAppStore.getState();
       dispatchAcpRollover({
         activePrompt: currentSession.activePrompt,
@@ -309,13 +333,37 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
   const onHistoryScroll = () => {
     const element = historyRef.current;
     if (!element) return;
-    setHistoryFollowState((current) => stateAfterAcpHistoryScroll({ scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }, current));
+    setHistoryFollowState((current) => {
+      const next = stateAfterAcpHistoryScroll({ scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }, current);
+      historyFollowBySession.set(session.id, next);
+      return next;
+    });
   };
   const resumeHistory = () => {
     const element = historyRef.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
-    setHistoryFollowState(resumedAcpHistoryFollowState());
+    const next = resumedAcpHistoryFollowState();
+    historyFollowBySession.set(session.id, next);
+    setHistoryFollowState(next);
+  };
+  const queueFollowUp = () => {
+    const next = enqueueAcpPrompt(queuedPrompts, draft);
+    if (next.length === queuedPrompts.length) return;
+    setQueuedPrompts(next);
+    useAppStore.getState().clearAcpDraft(session.id);
+  };
+  const sendQueued = async (item: AcpQueuedPrompt) => {
+    const current = useAppStore.getState().acpSessions.find((candidate) => candidate.id === session.id) ?? session;
+    if (!canDispatchAcpPrompt(acpComposerState({ activePrompt: current.activePrompt, status: current.status, pendingRequest: current.pendingRequests.length > 0 }))) return;
+    setQueuedPrompts((items) => items.map((candidate) => candidate.id === item.id ? { ...candidate, state: "dispatching" } : candidate));
+    try {
+      await promptAcpSession(session.id, item.request, token);
+      setQueuedPrompts((items) => removeQueuedAcpPrompt(items, item.id));
+    } catch (error) {
+      setQueuedPrompts((items) => items.map((candidate) => candidate.id === item.id ? { ...candidate, state: "queued" } : candidate));
+      setNotice(error instanceof Error ? error.message : "Queued ACP prompt failed", "error");
+    }
   };
   const submit = () => {
     if (pendingFileReadsRef.current.size > 0) return false;
@@ -336,15 +384,20 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
     try { await cancelAcpSession(session.id, token); }
     catch (error) { setNotice(error instanceof Error ? error.message : "ACP cancellation failed", "error"); }
   };
+  const status = session.status as string;
+  const state = status === "auth_required" ? "auth_required" : status === "connecting" ? "connecting" : status === "stopping" ? "stopping" : status === "disconnected" ? "disconnected" : status === "failed" ? "failed" : status === "exited" || status === "non_resumable" ? "exited" : session.pendingRequests.length ? "waiting" : session.activePrompt ? "active" : "ready";
+  const recoveryMessage = state === "exited" ? "This session has exited. Its conversation remains available." : state === "failed" ? "The provider connection failed. Retained activity is still available." : state === "disconnected" ? "The provider connection was lost. Retained activity is still available." : state === "auth_required" ? "Authenticate this session before sending a prompt." : state === "waiting" ? "A provider decision is pending for this session." : state === "active" ? "The provider is working on this session." : state === "connecting" ? "Connecting to the provider; this session remains local to the selected project." : state === "stopping" ? "Stopping this session; wait for confirmed exit." : undefined;
+  const canStartFreshSession = state === "failed" || state === "exited" || state === "disconnected";
   return <div className="acp-conversation">
-    <header className="acp-conversation-header"><div><span className="eyebrow">{session.providerLabel}</span><strong>{session.title}</strong></div><SessionStatus entry={{ kind: "acp", session }} /></header>
+    <header className="acp-execution-header"><div><span className="eyebrow">ACP SESSION · {session.providerLabel}</span><strong>{session.title}</strong><small>{session.resumability.replaceAll("_", " ")} · session-local conversation</small></div><SessionStatus entry={{ kind: "acp", session }} /></header>
+    {recoveryMessage && <div className={`acp-recovery acp-state-${state}`} role={state === "failed" || state === "exited" || state === "disconnected" ? "alert" : "status"}><strong>{state === "waiting" ? "Decision required" : state === "auth_required" ? "Authentication required" : state === "active" ? "Working" : state === "connecting" ? "Connecting" : state === "stopping" ? "Stopping" : state === "disconnected" ? "Disconnected" : state === "exited" ? "Session exited" : state === "failed" ? "Provider connection failed" : "Ready"}</strong><span>{recoveryMessage}{session.error ? ` ${session.error}` : ""}</span>{canStartFreshSession && <button type="button" onClick={recover}>Start a fresh session</button>}</div>}
+    <SubagentList subagents={session.subagents} />
     <ConfigControls session={session} />
     <AuthPanel session={session} />
-    <div className="acp-history-wrap" aria-busy={fileReadPending}>{/* History is append-only and entries may lack ids; the index entry is a uniqueness tail. */}
-    {/* biome-ignore lint/suspicious/noArrayIndexKey: append-only history; entries can lack stable ids */}
-    <div ref={historyRef} className="acp-history" onScroll={onHistoryScroll} aria-live="polite">{history.length ? history.map((activity, index) => <ActivityView activity={activity} onOpenReference={onOpenReference} key={`${activity.type}-${"id" in activity ? activity.id : index}-${index}`} />) : <p className="acp-history-empty">Prompt this session to start a provider conversation.</p>}</div>{historyFollowState.hasNewActivity && <button type="button" className="acp-new-activity" onClick={resumeHistory}>New activity</button>}</div>
     {session.pendingRequests.map((request) => <PendingRequest key={request.request.requestId} session={session} request={request} />)}
-     <div className="acp-composer"><div className="acp-composer-input"><textarea ref={textareaRef} value={draft.text} onChange={(event) => { updateAcpDraft(session.id, { text: event.target.value }); setCurrentCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} onSelect={(event) => { setCurrentCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} placeholder="Prompt this ACP session..." role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls={completionOpen ? completionListId : undefined} aria-activedescendant={completionOpen ? `${completionListId}-${activeCompletionIndex}` : undefined} aria-expanded={completionOpen} onKeyDown={(event) => {
+    <div className="acp-history-wrap" aria-busy={fileReadPending}>
+    <section ref={historyRef} className="acp-history" onScroll={onHistoryScroll} aria-label={`${session.title} conversation`} aria-live="off"><AcpTurnNarrative history={history} pendingRequests={session.pendingRequests} onOpenReference={(path, line, column, target) => onOpenReference(path, line, column, { projectId: session.projectId, sessionId: session.id, ...(target?.turnId ? { turnId: target.turnId } : {}), ...(target?.activityId ? { activityId: target.activityId } : {}) })} onOpenDiff={onOpenDiff ? (path, target) => onOpenDiff(path, { projectId: session.projectId, sessionId: session.id, ...(target?.turnId ? { turnId: target.turnId } : {}), ...(target?.activityId ? { activityId: target.activityId } : {}) }) : undefined} /></section>{historyFollowState.hasNewActivity && <button type="button" className="acp-new-activity" onClick={resumeHistory}>New activity</button>}</div>
+     <div className="acp-composer"><div className="acp-composer-input"><textarea ref={textareaRef} value={draft.text} onChange={(event) => { updateAcpDraft(session.id, { text: event.target.value }); setCurrentCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} onSelect={(event) => { setCurrentCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} placeholder={state === "active" ? "Draft a follow-up while this session works" : "Prompt this ACP session..."} role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls={completionOpen ? completionListId : undefined} aria-activedescendant={completionOpen ? `${completionListId}-${activeCompletionIndex}` : undefined} aria-expanded={completionOpen} onKeyDown={(event) => {
         const action = acpComposerKeyAction({ key: event.key, completionOpen, isComposing: event.nativeEvent.isComposing, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey });
         if (action === "move-down") { event.preventDefault(); setActiveCompletionIndex((current) => fileMatch ? moveAcpFileIndex(current, 1, fileSuggestions.length) : moveAcpCommandIndex(current, 1, commandSuggestions.length)); return; }
         if (action === "move-up") { event.preventDefault(); setActiveCompletionIndex((current) => fileMatch ? moveAcpFileIndex(current, -1, fileSuggestions.length) : moveAcpCommandIndex(current, -1, commandSuggestions.length)); return; }
@@ -353,11 +406,13 @@ function AcpConversation({ session, onOpenReference }: { session: AcpSession; on
         if (action === "submit") { if (pendingFileReadsRef.current.size > 0) event.preventDefault(); else if (submit()) event.preventDefault(); }
       }} />{completionOpen && fileMatch ? <div id={fileListId} className="acp-command-suggestions acp-file-suggestions" role="listbox" aria-label="Workspace files">{fileSuggestions.map((file, index) => <button id={`${fileListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={index === activeCompletionIndex ? "active" : ""} key={file.path} onMouseDown={(event) => event.preventDefault()} onClick={() => void selectFile(index)}><span><strong>@{file.path}</strong><small>Disk file</small></span></button>)}</div> : completionOpen ? <div id={commandListId} className="acp-command-suggestions" role="listbox" aria-label="Session commands">{commandSuggestions.map((suggestion, index) => suggestion.kind === "client" ? <button id={`${commandListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={`acp-command-client ${index === activeCompletionIndex ? "active" : ""}`} key={`client-${suggestion.command.name}`} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(index)}><span><strong>/{suggestion.command.name}</strong><small>{suggestion.command.description}</small></span><em>session</em></button> : <button id={`${commandListId}-${index}`} type="button" role="option" aria-selected={index === activeCompletionIndex} className={index === activeCompletionIndex ? "active" : ""} key={suggestion.command.name} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(index)}><span><strong>/{suggestion.command.name}</strong>{suggestion.command.description && <small>{suggestion.command.description}</small>}</span>{suggestion.command.inputHint && <em>{suggestion.command.inputHint}</em>}</button>)}</div> : null}</div>      {/* Layout container naming an attachment group; a fieldset would change layout semantics */}
       {/* biome-ignore lint/a11y/useSemanticElements: grouped attachments, not a form field group */}
-      {draft.references.length > 0 && <div className="acp-draft-attachments" role="group" aria-label="ACP draft attachments">{draft.references.map((reference) => <div className="acp-draft-attachment" key={reference.id}><span><strong>{reference.path}</strong><small>{reference.wholeFile ? "whole file" : `lines ${reference.startLine}-${reference.endLine}`} · {reference.content.length.toLocaleString()} chars{reference.mention ? " · disk snapshot" : ""}</small></span><button type="button" onClick={() => removeDraftReference(reference.id)} aria-label={`Remove ${reference.path} from draft`}>×</button></div>)}</div>}<div className="acp-composer-footer"><span>{draft.references.length ? `${draft.references.length} reference${draft.references.length === 1 ? "" : "s"} attached` : "References can be attached from the dock"}</span><div>{session.activePrompt ? <button type="button" onClick={() => void cancel()}>Cancel turn</button> : <button type="button" className="primary-button compact" onClick={() => void submit()} disabled={!draft.text.trim() && !draft.references.length}>{ACP_SEND_LABEL}</button>}</div></div></div>
+      {draft.references.length > 0 && <div className="acp-draft-attachments" role="group" aria-label="ACP draft attachments">{draft.references.map((reference) => <div className="acp-draft-attachment" key={reference.id}><span><strong>{reference.path}</strong><small>{reference.wholeFile ? "whole file" : `lines ${reference.startLine}-${reference.endLine}`} · {reference.content.length.toLocaleString()} chars{reference.mention ? " · disk snapshot" : ""}</small></span><button type="button" onClick={() => removeDraftReference(reference.id)} aria-label={`Remove ${reference.path} from draft`}>×</button></div>)}</div>}
+      {queuedPrompts.length > 0 && <fieldset className="acp-queued-prompts" aria-label="Queued follow-up prompts"><legend className="acp-activity-label">Queued follow-ups · explicit send required</legend>{queuedPrompts.map((item, index) => <div className="acp-queued-prompt" key={item.id}><span>{item.snapshot.text || "Reference review"}</span><button type="button" onClick={() => setQueuedPrompts((items) => moveQueuedAcpPrompt(items, item.id, -1))} disabled={index === 0 || item.state === "dispatching"} aria-label={`Move queued prompt ${index + 1} up`}>↑</button><button type="button" onClick={() => setQueuedPrompts((items) => moveQueuedAcpPrompt(items, item.id, 1))} disabled={index === queuedPrompts.length - 1 || item.state === "dispatching"} aria-label={`Move queued prompt ${index + 1} down`}>↓</button><button type="button" onClick={() => setQueuedPrompts((items) => removeQueuedAcpPrompt(items, item.id))} disabled={item.state === "dispatching"}>Remove</button>{!session.activePrompt && <button type="button" onClick={() => void sendQueued(item)} disabled={item.state === "dispatching"}>{item.state === "dispatching" ? "Sending…" : "Send"}</button>}</div>)}</fieldset>}
+      <div className="acp-composer-footer"><span>{state === "active" ? "Working · draft is unsent" : state === "waiting" ? "Waiting for an explicit decision" : draft.references.length ? `${draft.references.length} reference${draft.references.length === 1 ? "" : "s"} attached` : "@ files · / commands · Shift+Enter newline"}</span><div>{session.activePrompt ? <><button type="button" onClick={queueFollowUp} disabled={!draft.text.trim() && !draft.references.length}>Queue follow-up</button><button type="button" onClick={() => void cancel()}>Cancel turn</button></> : <button type="button" className="primary-button compact" onClick={() => void submit()} disabled={state !== "ready" || (!draft.text.trim() && !draft.references.length)}>{ACP_SEND_LABEL}</button>}</div></div></div>
    </div>;
 }
 
-export function AgentWorkbench({ onNewAgent, onOpenReference }: AgentWorkbenchProps) {
+export function AgentWorkbench({ onNewAgent, onOpenReference, onOpenDiff }: AgentWorkbenchProps) {
   const token = useAppStore((state) => state.token);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const terminals = useAppStore((state) => state.terminals);
@@ -419,6 +474,6 @@ export function AgentWorkbench({ onNewAgent, onOpenReference }: AgentWorkbenchPr
       </div>)}</section></div>
       <footer className="agent-target"><label htmlFor="agent-target">HANDOFF TARGET</label><select id="agent-target" value={referenceTargetId ?? ""} onChange={(event) => setReferenceTarget(event.target.value || undefined)}><option value="">No live agent selected</option>{liveAgents.map((entry) => <option value={entry.session.id} key={`${entry.kind}-${entry.session.id}`}>{entry.session.title}{entry.kind === "acp" ? ` · ${entry.session.providerLabel}` : ""}</option>)}</select><span>{referenceTargetId && liveAgents.some((entry) => entry.session.id === referenceTargetId) ? "Ready for reference insertion" : "Choose a live agent from here or Edit"}</span></footer>
     </aside>
-    <div className="agent-stage">{visibleAgents.length ? <div className={`agent-terminal-grid ${visibleAgents.length > 1 ? "split" : ""}`}>{visibleAgents.map((entry) => <article className={`agent-terminal-card ${entry.kind === "acp" ? "acp-card" : ""}`} key={`${entry.kind}-${entry.session.id}`}><header><div><span className="eyebrow">{entry.session.id === focused?.session.id ? "FOCUSED SESSION" : "PINNED SESSION"}</span><strong>{entry.session.title}</strong></div><SessionStatus entry={entry} /></header>{entry.kind === "acp" ? <AcpConversation session={entry.session} onOpenReference={onOpenReference} /> : <TerminalView session={entry.session} onOpenReference={onOpenReference} />}</article>)}</div> : <div className="agent-empty"><span className="agent-empty-mark">◎</span><p className="eyebrow">NO AGENTS RUNNING</p><h2>Start a parallel work window.</h2><p>Use named sessions for implementation, planning, or any other task you want to watch.</p><button type="button" className="primary-button" onClick={onNewAgent}>Start first agent</button></div>}</div>
+    <div className="agent-stage">{visibleAgents.length ? <div className={`agent-terminal-grid ${visibleAgents.length > 1 ? "split" : ""}`}>{visibleAgents.map((entry) => <article className={`agent-terminal-card ${entry.kind === "acp" ? "acp-card" : ""}`} key={`${entry.kind}-${entry.session.id}`}><header><div><span className="eyebrow">{entry.session.id === focused?.session.id ? "FOCUSED SESSION" : "PINNED SESSION"}</span><strong>{entry.session.title}</strong></div><SessionStatus entry={entry} /></header>{entry.kind === "acp" ? <AcpConversation session={entry.session} onOpenReference={onOpenReference} onOpenDiff={onOpenDiff} /> : <TerminalView session={entry.session} onOpenReference={(path, line, column) => onOpenReference(path, line, column, { projectId: entry.session.projectId, sessionId: entry.session.id })} />}</article>)}</div> : <div className="agent-empty"><span className="agent-empty-mark">◎</span><p className="eyebrow">NO AGENTS RUNNING</p><h2>Start a parallel work window.</h2><p>Use named sessions for implementation, planning, or any other task you want to watch.</p><button type="button" className="primary-button" onClick={onNewAgent}>Start first agent</button></div>}</div>
   </section>;
 }

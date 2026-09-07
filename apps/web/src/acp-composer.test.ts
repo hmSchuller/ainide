@@ -1,6 +1,6 @@
 import type { AcpPromptRequest } from "@ainide/shared";
 import { describe, expect, it, vi } from "vitest";
-import { acpComposerKeyAction, dispatchAcpPrompt } from "./acp-composer";
+import { acpComposerKeyAction, acpComposerState, dispatchAcpPrompt, enqueueAcpPrompt, moveQueuedAcpPrompt, removeQueuedAcpPrompt } from "./acp-composer";
 import type { AcpPromptDraft } from "./project-ui";
 import type { ReferenceItem } from "./references";
 
@@ -71,6 +71,28 @@ describe("ACP composer keyboard actions", () => {
     expect(acpComposerKeyAction({ key: "ArrowUp", completionOpen: true })).toBe("move-up");
     expect(acpComposerKeyAction({ key: "Escape", completionOpen: true })).toBe("dismiss-completion");
     expect(acpComposerKeyAction({ key: "Enter", completionOpen: true, shiftKey: true, ctrlKey: true })).toBe("newline");
+  });
+});
+
+describe("ACP composer state and explicit queue", () => {
+  it("exposes blocking, authentication, exit, and review states without dispatching", () => {
+    expect(acpComposerState({ activePrompt: false, status: "live", pendingRequest: true })).toBe("waiting");
+    expect(acpComposerState({ activePrompt: true, status: "live" })).toBe("active");
+    expect(acpComposerState({ activePrompt: false, status: "auth_required" })).toBe("auth_required");
+    expect(acpComposerState({ activePrompt: false, status: "exited" })).toBe("exited");
+    expect(acpComposerState({ activePrompt: false, status: "live", reviewReady: true })).toBe("review_ready");
+  });
+
+  it("queues, reorders, and removes prompts without sending them", () => {
+    const first = enqueueAcpPrompt([], { text: "first", references: [] }, "first");
+    const queued = enqueueAcpPrompt(first, { text: "second", references: [] }, "second");
+    expect(queued.map((item) => item.id)).toEqual(["first", "second"]);
+    expect(moveQueuedAcpPrompt(queued, "second", -1).map((item) => item.id)).toEqual(["second", "first"]);
+    expect(removeQueuedAcpPrompt(queued, "first").map((item) => item.id)).toEqual(["second"]);
+  });
+
+  it("does not queue an empty draft", () => {
+    expect(enqueueAcpPrompt([], emptyDraft(), "empty")).toEqual([]);
   });
 });
 

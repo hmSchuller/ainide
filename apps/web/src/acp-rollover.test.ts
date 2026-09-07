@@ -1,6 +1,6 @@
 import type { AcpSession } from "@ainide/shared";
 import { describe, expect, it, vi } from "vitest";
-import { dispatchAcpRollover, isAcpRolloverSelectable } from "./acp-rollover";
+import { dispatchAcpRecovery, dispatchAcpRollover, freshAcpSessionTitle, isAcpRolloverSelectable } from "./acp-rollover";
 
 const otherSession: AcpSession = { id: "same", title: "Fresh provider", titleSource: "provider", projectId: "/project", providerId: "fake", providerLabel: "Fake provider", authMethods: [], status: "live", capabilities: { canCancel: true, canClose: false, canLoad: true, canList: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true }, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "resumable" };
 
@@ -18,6 +18,39 @@ function baseInput(overrides: Partial<Parameters<typeof dispatchAcpRollover>[0]>
     ...overrides,
   };
 }
+
+describe("ACP recovery dispatch", () => {
+  it("adds and focuses a fresh session without mutating the failed source session", async () => {
+    const source: AcpSession = { ...otherSession, id: "failed-source", title: "Investigate failure", status: "failed", error: "provider stopped" };
+    const fresh: AcpSession = { ...otherSession, id: "fresh-session", title: freshAcpSessionTitle(source.title) };
+    const sessions = [source];
+    let focused = source.id;
+    const addSession = vi.fn((session: AcpSession) => sessions.push(session));
+    const focusSession = vi.fn((sessionId: string) => { focused = sessionId; });
+
+    await expect(dispatchAcpRecovery({ dispatch: vi.fn(async () => fresh), addSession, focusSession, notifyFailure: vi.fn() })).resolves.toBe(true);
+
+    expect(addSession).toHaveBeenCalledWith(fresh);
+    expect(focusSession).toHaveBeenCalledWith(fresh.id);
+    expect(sessions).toEqual([source, fresh]);
+    expect(sessions[0]).toEqual(source);
+    expect(focused).toBe(fresh.id);
+  });
+
+  it("leaves the source session untouched when a fresh session cannot start", async () => {
+    const source: AcpSession = { ...otherSession, id: "disconnected-source", status: "disconnected" };
+    const addSession = vi.fn();
+    const focusSession = vi.fn();
+    const notifyFailure = vi.fn();
+
+    await expect(dispatchAcpRecovery({ dispatch: vi.fn(async () => { throw new Error("provider unavailable"); }), addSession, focusSession, notifyFailure })).resolves.toBe(false);
+
+    expect(addSession).not.toHaveBeenCalled();
+    expect(focusSession).not.toHaveBeenCalled();
+    expect(notifyFailure).toHaveBeenCalledWith(expect.any(Error));
+    expect(source.status).toBe("disconnected");
+  });
+});
 
 describe("ACP rollover dispatch", () => {
   it("clears the draft, adopts the returned session, and restores nothing on success", async () => {

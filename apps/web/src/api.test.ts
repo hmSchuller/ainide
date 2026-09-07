@@ -28,6 +28,18 @@ describe("ACP web API", () => {
     expect(JSON.parse(String(init.body))).toEqual({ text: "Hello", context: [{ path: "src/a.ts", content: "code", startLine: 2, endLine: 2 }] });
   });
 
+  it("creates a titled independent ACP session through the authenticated API", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ id: "fresh", projectId: "/project", providerId: "fake" }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createAcpSession("fake", "token-1", { title: "Fresh session · Investigate" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/acp/sessions");
+    expect((init.headers as Record<string, string>)["x-session-token"]).toBe("token-1");
+    expect(JSON.parse(String(init.body))).toEqual({ providerId: "fake", title: "Fresh session · Investigate" });
+  });
+
   it("reads and updates a project's agent settings", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

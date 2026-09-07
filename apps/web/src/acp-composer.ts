@@ -44,6 +44,59 @@ export interface AcpPromptSubmission {
   request: AcpPromptRequest;
 }
 
+export type AcpComposerState = "ready" | "active" | "waiting" | "auth_required" | "exited" | "failed" | "review_ready";
+
+export interface AcpComposerStateInput {
+  activePrompt: boolean;
+  status: string;
+  pendingRequest?: boolean;
+  reviewReady?: boolean;
+}
+
+export function acpComposerState(input: AcpComposerStateInput): AcpComposerState {
+  if (input.status === "auth_required") return "auth_required";
+  if (input.status === "exited" || input.status === "non_resumable") return "exited";
+  if (input.status === "failed" || input.status === "disconnected") return "failed";
+  if (input.reviewReady) return "review_ready";
+  if (input.pendingRequest) return "waiting";
+  if (input.activePrompt) return "active";
+  return "ready";
+}
+
+export interface AcpQueuedPrompt extends AcpPromptSubmission {
+  id: string;
+  state: "queued" | "dispatching";
+}
+
+let nextQueuedPromptId = 0;
+
+export function enqueueAcpPrompt(queue: readonly AcpQueuedPrompt[], draft: AcpPromptDraft, id = `queued-${++nextQueuedPromptId}`): AcpQueuedPrompt[] {
+  const submission = prepareAcpPromptSubmission(draft);
+  if (!submission) return [...queue];
+  return [...queue, { id, state: "queued", ...submission }];
+}
+
+export function removeQueuedAcpPrompt(queue: readonly AcpQueuedPrompt[], id: string): AcpQueuedPrompt[] {
+  return queue.filter((item) => item.id !== id);
+}
+
+export function moveQueuedAcpPrompt(queue: readonly AcpQueuedPrompt[], id: string, direction: -1 | 1): AcpQueuedPrompt[] {
+  const index = queue.findIndex((item) => item.id === id);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= queue.length) return [...queue];
+  const next = [...queue];
+  const item = next[index];
+  const replacement = next[target];
+  if (!item || !replacement) return next;
+  next[index] = replacement;
+  next[target] = item;
+  return next;
+}
+
+export function canDispatchAcpPrompt(state: AcpComposerState): boolean {
+  return state === "ready";
+}
+
 export function prepareAcpPromptSubmission(draft: AcpPromptDraft): AcpPromptSubmission | undefined {
   const snapshot: AcpPromptDraft = { text: draft.text, references: [...draft.references] };
   const text = snapshot.text.trim() || (snapshot.references.length ? "Review the selected references." : "");

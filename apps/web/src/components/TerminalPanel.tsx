@@ -15,16 +15,19 @@ interface TerminalPanelProps {
 export function TerminalView({ session, onOpenReference }: { session: TerminalSession; onOpenReference: TerminalPanelProps["onOpenReference"] }) {
   const token = useAppStore((state) => state.token);
   const workspace = useAppStore((state) => state.workspace);
+  const updateTerminal = useAppStore((state) => state.updateTerminal);
   const mountRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
-  const [connection, setConnection] = useState<"connecting" | "connected" | "closed">("connecting");
+  const processAliveRef = useRef(session.alive);
+  const [connection, setConnection] = useState<"connecting" | "reconnecting" | "connected" | "closed">("connecting");
   const [error, setError] = useState<string>();
-  const updateTerminal = useAppStore((state) => state.updateTerminal);
+
   const workspaceRef = useRef(workspace);
   const onOpenReferenceRef = useRef(onOpenReference);
   workspaceRef.current = workspace;
   onOpenReferenceRef.current = onOpenReference;
+  processAliveRef.current = session.alive;
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -33,6 +36,9 @@ export function TerminalView({ session, onOpenReference }: { session: TerminalSe
     terminal.loadAddon(fit);
     terminal.open(mountRef.current);
     terminalRef.current = terminal;
+    let disposed = false;
+    let reconnectTimer: number | undefined;
+
     const resize = () => {
       try {
         fit.fit();
@@ -41,34 +47,60 @@ export function TerminalView({ session, onOpenReference }: { session: TerminalSe
     };
     const observer = new ResizeObserver(resize);
     observer.observe(mountRef.current);
-    const socket = new WebSocket(websocketUrl("/terminal", token, { sessionId: session.id }));
-    let disposed = false;
-    socketRef.current = socket;
-    socket.onopen = () => {
-      if (disposed) { socket.close(); return; }
-      setConnection("connected");
-      socket.send(JSON.stringify({ type: "attach", sessionId: session.id }));
-      resize();
-    };
-    socket.onmessage = (event) => {
-      try {
-        const message = JSON.parse(String(event.data)) as { type?: string; data?: string; message?: string; exitCode?: number | null };
-         if (message.type === "output") terminal.write(message.data ?? "");
-         if (message.type === "error") {
-           setConnection("closed");
-           setError(message.message ?? "Terminal connection was rejected");
-         }
-         if (message.type === "exit") {
-          updateTerminal(session.id, { alive: false });
-          terminal.write(`\r\n\x1b[90m[process exited${message.exitCode == null ? "" : ` with ${message.exitCode}`} ]\x1b[0m\r\n`);
-          setError(undefined);
+
+    const connect = () => {
+      if (disposed) return;
+      setConnection(reconnectTimer === undefined ? "connecting" : "reconnecting");
+      const socket = new WebSocket(websocketUrl("/terminal", token, { sessionId: session.id }));
+      socketRef.current = socket;
+      socket.onopen = () => {
+        if (disposed) { socket.close(); return; }
+        setConnection("connected");
+        setError(undefined);
+        socket.send(JSON.stringify({ type: "attach", sessionId: session.id }));
+        resize();
+      };
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(String(event.data)) as { type?: string; data?: string; message?: string; exitCode?: number | null };
+          if (message.type === "output") terminal.write(message.data ?? "");
+          if (message.type === "error") {
+            setConnection("closed");
+            setError(message.message ?? "Terminal connection was rejected");
+          }
+          if (message.type === "exit") {
+            processAliveRef.current = false;
+            updateTerminal(session.id, { alive: false });
+            terminal.write(`\r\n\x1b[90m[process exited${message.exitCode == null ? "" : ` with ${message.exitCode}`} ]\x1b[0m\r\n`);
+            setConnection("closed");
+            setError(undefined);
+            if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+            reconnectTimer = undefined;
+          }
+        } catch {
+          // Output is opaque PTY data. It is displayed, never interpreted.
+          terminal.write(String(event.data));
         }
-      } catch {
-        terminal.write(String(event.data));
-      }
+      };
+      socket.onerror = () => {
+        if (!disposed) setError("Terminal connection failed. Is the server running?");
+      };
+      socket.onclose = () => {
+        if (disposed || socketRef.current !== socket) return;
+        socketRef.current = null;
+        if (processAliveRef.current) {
+          setConnection("reconnecting");
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = undefined;
+            connect();
+          }, 500);
+        } else {
+          setConnection("closed");
+        }
+      };
     };
-    socket.onerror = () => { if (!disposed) { setConnection("closed"); setError("Terminal connection failed. Is the server running?"); } };
-    socket.onclose = () => { if (!disposed) setConnection("closed"); };
+    connect();
+
     terminal.registerLinkProvider({
       provideLinks: (lineNumber, callback) => {
         const text = terminal.buffer.active.getLine(lineNumber - 1)?.translateToString() ?? "";
@@ -99,25 +131,27 @@ export function TerminalView({ session, onOpenReference }: { session: TerminalSe
       },
     });
     const input = terminal.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", sessionId: session.id, data }));
+      if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: "input", sessionId: session.id, data }));
     });
     return () => {
       disposed = true;
       observer.disconnect();
       input.dispose();
-      if (socket.readyState === WebSocket.CONNECTING) {
-        socket.onopen = () => socket.close();
-        socket.onerror = null;
-      } else if (socket.readyState === WebSocket.OPEN) socket.close();
-      terminal.dispose();
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      if (socketRef.current?.readyState === WebSocket.CONNECTING) {
+        socketRef.current.onopen = () => socketRef.current?.close();
+        socketRef.current.onerror = null;
+      } else if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.close();
       socketRef.current = null;
+      terminal.dispose();
     };
   }, [session.id, token, updateTerminal]);
 
-  return <div className="terminal-view">
-    <div className="terminal-connection">{error ?? (connection === "connected" ? "connected" : "connecting")}</div>
+  return <section className="terminal-view" aria-label={`${session.title} terminal`}>
+    {error && <div className="terminal-connection terminal-error" role="alert">{error}</div>}
+    {!error && <div className="terminal-connection" role="status">{session.alive ? "process alive" : "process exited"} · {connection}</div>}
     <div ref={mountRef} className="xterm-mount" />
-  </div>;
+  </section>;
 }
 
 export function TerminalPanel({ onNewTerminal, onOpenReference }: TerminalPanelProps) {

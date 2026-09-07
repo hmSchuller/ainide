@@ -16,10 +16,10 @@ vi.hoisted(() => {
 
 vi.mock("./TerminalPanel", () => ({ TerminalView: () => null }));
 
-import type { AcpActivity, AcpSession, TerminalSession } from "@ainide/shared";
+import type { AcpActivity, AcpSession, AcpSubagent, TerminalSession } from "@ainide/shared";
 import { ACP_SEND_LABEL } from "../acp-composer";
 import { useAppStore } from "../store";
-import { ActivityView, AgentWorkbench, combinedAgentEntries } from "./AgentWorkbench";
+import { AcpConversation, ActivityView, AgentWorkbench, combinedAgentEntries, moveRovingIndex, SubagentList } from "./AgentWorkbench";
 
 const capabilities = { canCancel: true, canClose: false, canLoad: false, canList: false, canResume: false, canSetConfig: false, canReadTextFile: true, canWriteTextFile: true, canUseTerminal: true, canRequestPermission: true, canElicit: true };
 
@@ -53,7 +53,7 @@ describe("AgentWorkbench", () => {
     ];
     useAppStore.setState({ activeProjectId: "/project", acpSessions: [acp], focusedSessionId: acp.id, pinnedSessionId: undefined, acpHistory: { [acp.id]: history } });
 
-    const markup = renderToStaticMarkup(<>{history.map((activity) => <ActivityView activity={activity} onOpenReference={() => undefined} key={JSON.stringify(activity)} />)}</>);
+    const markup = renderToStaticMarkup(history.map((activity) => <ActivityView activity={activity} onOpenReference={() => undefined} key={JSON.stringify(activity)} />));
 
     expect(markup).toContain('class="acp-message user"');
     expect(markup).toContain('class="acp-message agent"');
@@ -81,7 +81,7 @@ describe("AgentWorkbench", () => {
     ];
     useAppStore.setState({ activeProjectId: "/project", acpSessions: [acp], focusedSessionId: acp.id, pinnedSessionId: undefined, acpHistory: { [acp.id]: history } });
 
-    const markup = renderToStaticMarkup(<>{history.map((activity) => <ActivityView activity={activity} onOpenReference={() => undefined} key={JSON.stringify(activity)} />)}</>);
+    const markup = renderToStaticMarkup(history.map((activity) => <ActivityView activity={activity} onOpenReference={() => undefined} key={JSON.stringify(activity)} />));
 
     expect(markup).toContain('class="acp-plan"');
     expect(markup).toContain('class="acp-tool completed"');
@@ -95,8 +95,42 @@ describe("AgentWorkbench", () => {
     expect(markup).toContain("<pre>terminal text</pre>");
   });
 
+  it("keeps the workbench session-centric", () => {
+    const acp: AcpSession = { id: "session", title: "Explore", titleSource: "user", projectId: "/project", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "resumable" };
+    useAppStore.setState({ activeProjectId: "/project", terminals: [], acpSessions: [acp], focusedSessionId: acp.id, pinnedSessionId: undefined });
+    expect(useAppStore.getState().acpSessions).toHaveLength(1);
+    expect(useAppStore.getState().activeProjectId).toBe("/project");
+    expect(combinedAgentEntries([], [acp], "/project").map((entry) => entry.session.title)).toEqual(["Explore"]);
+  });
+
+  it("offers an independent fresh-session recovery action for failed, exited, and disconnected ACP sessions", () => {
+    for (const status of ["failed", "exited", "disconnected"] as const) {
+      const session: AcpSession = { id: `recovery-${status}`, title: `Recovery ${status}`, titleSource: "user", projectId: "/project", providerId: "fake", providerLabel: "Fake", authMethods: [], status, capabilities, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" };
+      const markup = renderToStaticMarkup(<AcpConversation session={session} onOpenReference={() => undefined} />);
+      expect(markup).toContain("Start a fresh session");
+      expect(markup).not.toContain("Start new context");
+    }
+  });
+
+  it("renders only explicitly provider-reported subordinate activity", () => {
+    const subagents: AcpSubagent[] = [{ providerId: "fake", id: "child-1", name: "Scout", role: "research", activity: "Reading files", state: "running" }];
+    const acp: AcpSession = { id: "parent", title: "Parent", titleSource: "user", projectId: "/project", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "resumable", subagents };
+    const markup = renderToStaticMarkup(<SubagentList subagents={acp.subagents} />);
+    expect(markup).toContain("Subordinate activity");
+    expect(markup).toContain("Scout");
+    expect(markup).toContain("Reading files");
+    expect(markup).not.toContain("Stop subagent");
+  });
+
   it("advertises Enter as the primary ACP send shortcut", () => {
     expect(ACP_SEND_LABEL).toBe("Send Enter");
+  });
+
+  it("wraps roving navigation across the session list", () => {
+    expect(moveRovingIndex(0, 1, 2)).toBe(1);
+    expect(moveRovingIndex(1, 1, 2)).toBe(0);
+    expect(moveRovingIndex(0, -1, 2)).toBe(1);
+    expect(moveRovingIndex(0, 1, 0)).toBe(-1);
   });
 
 });

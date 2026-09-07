@@ -4,6 +4,31 @@ import type { AcpPromptDraft } from "./project-ui";
 
 export const ACP_NEW_COMMAND_GUIDANCE = "Cancel the active prompt first";
 
+export interface AcpRecoveryInput {
+  dispatch: () => Promise<AcpSession>;
+  addSession: (session: AcpSession) => void;
+  focusSession: (sessionId: string) => void;
+  notifyFailure: (error: unknown) => void;
+}
+
+export function freshAcpSessionTitle(title: string): string {
+  const trimmed = title.trim();
+  return trimmed ? `Fresh session · ${trimmed}` : "Fresh ACP session";
+}
+
+/** Start an independent ACP session; this intentionally does not resume or replace the source session. */
+export async function dispatchAcpRecovery(input: AcpRecoveryInput): Promise<boolean> {
+  try {
+    const session = await input.dispatch();
+    input.addSession(session);
+    input.focusSession(session.id);
+    return true;
+  } catch (error) {
+    input.notifyFailure(error);
+    return false;
+  }
+}
+
 export interface AcpRolloverInput {
   activePrompt: boolean;
   authRequired: boolean;

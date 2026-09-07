@@ -18,13 +18,13 @@ const props = {
 };
 
 describe("AcpProviderPicker", () => {
-  it("renders configured labels without free-form or PTY choices", () => {
+  it("renders configured labels and a direct PTY session choice", () => {
     const markup = renderToStaticMarkup(<AcpProviderPicker {...props} />);
     expect(markup).toContain("Cursor");
     expect(markup).toContain("OpenCode");
     expect(markup).not.toContain("cursor");
     expect(markup).not.toContain("opencode");
-    expect(markup).not.toContain("PTY");
+    expect(markup).toContain("PTY agent session");
     expect(markup).toContain('role="dialog"');
   });
 

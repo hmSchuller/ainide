@@ -1,6 +1,7 @@
 import type { AcpSession, BuildCommand, FileEntry, GitStatus, ProjectAgentSettings, ProjectRef, ProjectSessionSnapshot, TerminalSession, Workspace } from "@ainide/shared";
 import { missingTerminalKinds } from "@ainide/shared";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AccessibleAnnouncements, isEditableTarget, useDialogFocus } from "./accessibility";
 import { acpEventsUrl, closeProject, createAcpSession, createPath, createTerminal, deleteFile, getGitFileComparison, getGitStatus, getProjectAgentSettings, getProjectBuildCommands, getReviewStatus, getSession, getTerminals, getVersion, listFiles, openProject, type ProjectMutationResponse, parseAcpEvent, parseEvent, readFile, renameFile, saveProjectSnapshot, searchFiles, startReview, switchProject, updateProjectAgentSettings, updateProjectBuildCommands, websocketUrl, writeFile } from "./api";
 import { createAutoSaver } from "./auto-save";
 import { copyTextToClipboard } from "./clipboard";
@@ -20,7 +21,8 @@ import { WorkspacePicker } from "./components/WorkspacePicker";
 import { basenameFromPath, joinWorkspacePath, renameEntryPath } from "./explorer-actions";
 import { createGitPollingScheduler } from "./git-polling";
 import { createGitRequestCoordinator } from "./git-request";
-import { shouldShowReferenceDock, terminalPanelVisible } from "./layout-prefs";
+import { type AgentReferenceLocation, captureInspectionReturn, clearInspectionReturn, type InspectionReturnLocation, makeInspectionReturnLocation } from "./inspection-navigation";
+import { shouldDismissExplorerPresentation, shouldShowReferenceDock, terminalPanelVisible, workbenchClassName } from "./layout-prefs";
 import { PRIMARY_MODE_LABELS, PRIMARY_MODES } from "./navigation";
 import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, snapshotFromBag } from "./project-ui";
 import { projectRefFromMutation, readRecentProjects, rememberRecentProject, writeRecentProjects } from "./recent-projects";
@@ -52,6 +54,39 @@ function fuzzy(value: string, query: string): boolean {
 function leavingSnapshot(): ProjectSessionSnapshot | undefined {
   const state = useAppStore.getState();
   return state.workspace ? snapshotFromBag(state.workspace, captureProjectBag(state)) : undefined;
+}
+
+function renderedConversationContext(): Pick<AgentReferenceLocation, "turnId" | "activityId"> & { conversationScrollTop?: number } {
+  if (typeof document === "undefined") return {};
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+  const activity = active?.closest<HTMLElement>("[data-activity-id]");
+  const turn = active?.closest<HTMLElement>("[data-turn-id]");
+  const history = active?.closest<HTMLElement>(".acp-history");
+  return {
+    ...(turn?.dataset.turnId ? { turnId: turn.dataset.turnId } : {}),
+    ...(activity?.dataset.activityId ? { activityId: activity.dataset.activityId } : {}),
+    ...(history ? { conversationScrollTop: history.scrollTop } : {}),
+  };
+}
+
+function restoreConversationContext(location: InspectionReturnLocation): void {
+  if (typeof window === "undefined" || (!location.turnId && !location.conversation)) return;
+  window.requestAnimationFrame(() => {
+    const histories = [...document.querySelectorAll<HTMLElement>(".acp-history")];
+    const matchingHistory = location.turnId
+      ? histories.find((history) => [...history.querySelectorAll<HTMLElement>("[data-turn-id]")].some((turn) => turn.dataset.turnId === location.turnId))
+      : undefined;
+    // Agents renders the focused session first. Prefer a turn match so a pinned
+    // session with the same provider-generated id cannot steal the viewport.
+    const history = matchingHistory ?? histories[0];
+    if (!history) return;
+    if (location.conversation?.scrollTop !== undefined) history.scrollTop = location.conversation.scrollTop;
+    if (location.conversation?.scrollTop === undefined && location.turnId) {
+      const turn = [...history.querySelectorAll<HTMLElement>("[data-turn-id]")].find((candidate) => candidate.dataset.turnId === location.turnId);
+      const activity = location.activityId && turn ? [...turn.querySelectorAll<HTMLElement>("[data-activity-id]")].find((candidate) => candidate.dataset.activityId === location.activityId) : undefined;
+      (activity ?? turn)?.scrollIntoView({ block: "center" });
+    }
+  });
 }
 
 export default function App() {
@@ -114,6 +149,8 @@ export default function App() {
   const [agentSettingsError, setAgentSettingsError] = useState<string>();
   const [startingProviderId, setStartingProviderId] = useState<string>();
   const startingProviderRef = useRef<string>();
+  const commandModalRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(commandModalRef, "input", () => { setPaletteOpen(false); setQuickOpen(false); }, paletteOpen || quickOpen);
   const recentProjectsRef = useRef(recentProjects);
   const gitRequestRef = useRef(createGitRequestCoordinator());
 
@@ -202,9 +239,10 @@ export default function App() {
     const currentWorkspace = current.workspace;
     const projectId = context.projectId ?? current.activeProjectId;
     const nextToken = context.nextToken ?? current.token;
-    const isCurrentOperation = () => Boolean(projectId && nextToken && isCurrentProject(projectId, nextToken))
-      && (context.requestId === undefined || gitRequestIsCurrent(context.requestId, projectId!, nextToken!));
-    if (!projectId || !nextToken || !isCurrentOperation()) return;
+    if (!projectId || !nextToken) return;
+    const isCurrentOperation = () => isCurrentProject(projectId, nextToken)
+      && (context.requestId === undefined || gitRequestIsCurrent(context.requestId, projectId, nextToken));
+    if (!isCurrentOperation()) return;
     const matching = current.tabs.find((tab) => tab.path === path);
     if (!matching) {
       markRecent(path);
@@ -552,7 +590,7 @@ export default function App() {
     autoSaver.schedule(path);
   };
 
-  const openReference = (path: string, line: number, column?: number) => {
+  const openReference = (path: string, line: number, column?: number, source?: AgentReferenceLocation) => {
     const relativePath = workspace ? workspaceRelativePath(path, workspace.rootPath) : path;
     if (!relativePath) {
       setNotice("Provider location is outside the active workspace", "error");
@@ -560,8 +598,46 @@ export default function App() {
     }
     path = relativePath;
     const current = useAppStore.getState();
+    if (source?.projectId && source.projectId !== current.activeProjectId) {
+      setNotice("Provider location belongs to another project", "error");
+      return;
+    }
+    const sessionId = source?.sessionId;
+    // The current workbench seam forwards project/session; the rendered target
+    // markers preserve turn/activity/scroll context until it forwards the full
+    // target object without requiring a process or session lifecycle change.
+    const rendered = renderedConversationContext();
     const paneId = findPaneForPath(current.panes, path) ?? current.focusedPaneId;
+    if (current.activeProjectId && sessionId) {
+      captureInspectionReturn(makeInspectionReturnLocation({ projectId: source?.projectId ?? current.activeProjectId, sessionId, mode: "agents", turnId: source?.turnId ?? rendered.turnId, activityId: source?.activityId ?? rendered.activityId, kind: "file", path, line, column, paneId, conversationScrollTop: rendered.conversationScrollTop }));
+      setMode("edit");
+    }
     void openFile({ name: fileName(path), path, type: "file" }, paneId).then((openedPane) => setPendingLocation({ path, line, column, paneId: openedPane ?? paneId }));
+  };
+
+  const openDiff = async (path: string | undefined, source?: AgentReferenceLocation) => {
+    const current = useAppStore.getState();
+    if (source?.projectId && source.projectId !== current.activeProjectId) {
+      setNotice("Provider diff belongs to another project", "error");
+      return;
+    }
+    const sessionId = source?.sessionId;
+    const rendered = renderedConversationContext();
+    if (current.activeProjectId && sessionId) captureInspectionReturn(makeInspectionReturnLocation({ projectId: source?.projectId ?? current.activeProjectId, sessionId, mode: "review", turnId: source?.turnId ?? rendered.turnId, activityId: source?.activityId ?? rendered.activityId, kind: "diff", reviewScope: "working-tree", path, conversationScrollTop: rendered.conversationScrollTop }));
+    await switchToReview(true);
+  };
+
+  const returnFromInspection = (location: InspectionReturnLocation) => {
+    const current = useAppStore.getState();
+    if (location.projectId !== current.activeProjectId) {
+      clearInspectionReturn(location);
+      setNotice("The inspection source belongs to another project", "error");
+      return;
+    }
+    current.setFocusedSession(location.sessionId);
+    setMode("agents");
+    restoreConversationContext(location);
+    clearInspectionReturn(location);
   };
 
   const refresh = async () => {
@@ -849,6 +925,25 @@ export default function App() {
     }
   };
 
+  const startPtyAgent = async () => {
+    if (!token || startingProviderRef.current) return;
+    startingProviderRef.current = "pty";
+    setStartingProviderId("pty");
+    setAgentSettingsError(undefined);
+    try {
+      const created = await createTerminal("agent", token);
+      addTerminal(created);
+      useAppStore.getState().setFocusedSession(created.id);
+      setMode("agents");
+      setProviderPickerOpen(false);
+    } catch (error) {
+      setAgentSettingsError(error instanceof Error ? error.message : "PTY session could not be started");
+    } finally {
+      startingProviderRef.current = undefined;
+      setStartingProviderId(undefined);
+    }
+  };
+
   const loadedFiles = useMemo(() => Object.values(directories).flatMap((directory) => directory.entries).filter((entry, index, all) => entry.type === "file" && all.findIndex((other) => other.path === entry.path) === index), [directories]);
   const quickResults = (searchResults.length ? searchResults : loadedFiles).filter((entry) => !query || fuzzy(`${entry.name} ${entry.path}`, query)).slice(0, 40);
   const paletteActions: PaletteAction[] = [
@@ -876,6 +971,7 @@ export default function App() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: rebind only when the bound shortcuts' inputs change
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) return;
       const command = event.metaKey || event.ctrlKey;
       if (!command) return;
       if (event.shiftKey && event.key.toLowerCase() === "p") { event.preventDefault(); setPaletteOpen(true); setQuickOpen(false); setQuery(""); }
@@ -894,6 +990,10 @@ export default function App() {
    }, [tabs, panes, focusedPaneId]);
 
   useEffect(() => {
+    if (shouldDismissExplorerPresentation(mode)) setMobileSidebar(false);
+  }, [mode]);
+
+  useEffect(() => {
     if (!quickOpen || !query || !token) { setSearchResults([]); return; }
     const timer = window.setTimeout(() => void searchFiles(query, token).then(setSearchResults).catch(() => setSearchResults([])), 180);
     return () => window.clearTimeout(timer);
@@ -907,6 +1007,7 @@ export default function App() {
 
   const changedRecently = Object.values(recentChanges).filter((time) => Date.now() - time < 10 * 60 * 1000).length;
   return <div className={`app-shell ${mobileSidebar ? "mobile-sidebar-open" : ""}`}>
+    <AccessibleAnnouncements notices={notices} />
     <header className="topbar">
       <button type="button" className="mobile-menu" onClick={() => setMobileSidebar(!mobileSidebar)}>☰</button>
       <ProjectSwitcher
@@ -930,7 +1031,7 @@ export default function App() {
         })}</div>
         <div className="top-actions"><UpdateBadge version={version} /><BuildRunner onOpenSettings={openProjectSettings} /><button type="button" className="git-summary" onClick={() => void switchToReview()} title="Open review"><span className="status-pip" />{git?.summary.filesChanged ? <>Review changes <strong>{git.summary.filesChanged} files · +{git.summary.insertions} −{git.summary.deletions}</strong></> : "Working tree clean"}</button><span className="agent-activity" title="Files changed recently"><i /> Agent {changedRecently ? `${changedRecently} change${changedRecently === 1 ? "" : "s"}` : "idle"}</span><button type="button" className="command-button" onClick={() => { setPaletteOpen(true); setQuery(""); }}>⌘⇧P <span>Commands</span></button></div>
     </header>
-    <div className="workbench">
+    <div className={workbenchClassName(mode)}>
         <div className="explorer-wrap" style={{ width: explorerWidth }}><Explorer
           onOpenFile={(entry, secondary) => void openFile(entry, secondary ? "secondary" : "primary")}
           onRefresh={() => void refresh()}
@@ -950,6 +1051,7 @@ export default function App() {
           <div className="mode-surface" hidden={mode !== "edit"}>
             <EditorSurface
                 onContentChange={handleContentChange}
+               onReturnFromInspection={returnFromInspection}
                flushAutoSave={(path) => autoSaver.flush(path)}
                cancelAutoSave={(path) => autoSaver.cancel(path)}
                onCopySelection={(tab, selection) => addSelectionReference(tab, selection, true)}
@@ -959,15 +1061,15 @@ export default function App() {
              />
              {shouldShowReferenceDock(referenceKit.length) && <ReferenceDock />}
            </div>
-            <div className="mode-surface" hidden={mode !== "agents"}><AgentWorkbench onNewAgent={newAgent} onOpenReference={openReference} /></div>
+            <div className="mode-surface" hidden={mode !== "agents"}><AgentWorkbench onNewAgent={newAgent} onOpenReference={openReference} onOpenDiff={openDiff} /></div>
            <div className="mode-surface" hidden={mode !== "review"}>
-            <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} />
+            <ReviewSurface scope={reviewScope} onScopeChange={(scope) => setReview({ scope })} onStart={() => void switchToReview(true)} onReturnFromInspection={returnFromInspection} />
           </div>
            <div className="mode-surface" hidden={mode !== "lazygit"}><LazyGitSurface onOpenReference={openReference} /></div>
          {terminalPanelVisible(mode) && <TerminalPanel onNewTerminal={(kind) => void newTerminal(kind)} onOpenReference={openReference} />}
       </main>
     </div>
-    <div className="notices">{notices.map((notice) => <button type="button" className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)}>{notice.text}<span>×</span></button>)}</div>
+    <section className="notices" aria-label="Application notices">{notices.map((notice) => <button type="button" className={`notice ${notice.tone}`} key={notice.id} onClick={() => useAppStore.getState().dismissNotice(notice.id)} aria-label={`Dismiss notice: ${notice.text}`}>{notice.text}<span aria-hidden="true">×</span></button>)}</section>
     {terminalError && mode !== "lazygit" && <div className="terminal-error-toast"><b>Terminal note</b> {terminalError}</div>}
       {/* Adding-project overlay double-clicks dismiss the modal; the picker owns Escape/close */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismiss; the picker itself owns close/Escape */}
@@ -977,14 +1079,13 @@ export default function App() {
         void openFromPath(path, token).then(() => setAddingProject(false)).catch((error) => setPickerError(error instanceof Error ? error.message : "Could not open workspace")).finally(() => setPickerBusy(false));
       }} />
      </div>}
-    {providerPickerOpen && <AcpProviderPicker providers={agentSettings?.all ?? []} disabled={agentSettings?.disabled ?? []} loading={agentSettingsLoading} error={agentSettingsError} startingProviderId={startingProviderId} recentSessions={recentAcpSessions} onRetry={() => void loadAgentSettings()} onSelect={(providerId) => void startAcpProvider(providerId)} onRecentSelect={(providerId, sessionId) => void startAcpProvider(providerId, sessionId)} onClose={() => setProviderPickerOpen(false)} />}
+    {providerPickerOpen && <AcpProviderPicker providers={agentSettings?.all ?? []} disabled={agentSettings?.disabled ?? []} loading={agentSettingsLoading} error={agentSettingsError} startingProviderId={startingProviderId} recentSessions={recentAcpSessions} onRetry={() => void loadAgentSettings()} onSelect={(providerId) => void startAcpProvider(providerId)} onRecentSelect={(providerId, sessionId) => void startAcpProvider(providerId, sessionId)} onSelectPty={() => void startPtyAgent()} onClose={() => setProviderPickerOpen(false)} />}
     {projectSettingsOpen && <ProjectAgentSettingsDialog settings={agentSettings} builds={buildCommands} loading={agentSettingsLoading} error={agentSettingsError} onRetry={() => void loadAgentSettings()} onToggle={(providerId, disabled) => void toggleAgentDisabled(providerId, disabled)} onSaveBuilds={saveProjectBuilds} onClose={() => setProjectSettingsOpen(false)} />}
     {/* Palette/quick-open overlay double-clicks dismiss the modal; Escape and close controls exist */}
     {/* biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismiss; the palette owns Escape/close */}
     {(paletteOpen || quickOpen) && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) { setPaletteOpen(false); setQuickOpen(false); } }}>
-      <div className="command-modal">
-        {/* biome-ignore lint/a11y/noAutofocus: command palette focuses its input when opened */}
-        <div className="command-input"><span>{quickOpen ? "⌕" : "⌘"}</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={quickOpen ? "Search files..." : "Type a command..."} onKeyDown={(event) => { if (event.key === "Escape") { setQuickOpen(false); setPaletteOpen(false); } }} /></div>
+      <div ref={commandModalRef} className="command-modal" role="dialog" aria-modal="true" aria-label={quickOpen ? "Quick open" : "Command palette"} tabIndex={-1}>
+        <div className="command-input"><span aria-hidden="true">{quickOpen ? "⌕" : "⌘"}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={quickOpen ? "Search files..." : "Type a command..."} onKeyDown={(event) => { if (event.key === "Escape") { setQuickOpen(false); setPaletteOpen(false); } }} /></div>
         <div className="command-list">{quickOpen ? (quickResults.length ? quickResults.map((entry) => <button type="button" key={entry.path} onClick={() => { setQuickOpen(false); void openFile(entry); }}>{entry.name}<small>{entry.path}</small></button>) : <div className="command-empty">No loaded files match. Expand folders in the explorer to index them.</div>) : (paletteActions.length ? paletteActions.map((action) => <button type="button" key={action.label} onClick={action.run}><span>{action.label}</span>{action.shortcut && <kbd>{action.shortcut}</kbd>}</button>) : <div className="command-empty">No commands match.</div>)}</div>
       </div>
     </div>}

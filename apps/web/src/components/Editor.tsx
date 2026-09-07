@@ -1,14 +1,17 @@
 import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import { type DragEvent, useEffect, useRef, useState } from "react";
 import { language } from "../file-language";
+import type { InspectionReturnLocation } from "../inspection-navigation";
 import { diffLines } from "../line-diff";
 import { configureMonacoLanguageSurface } from "../monaco-language-surface";
 import type { CodeSelection } from "../references";
 import { gitComparisonKey, isDirty, useAppStore } from "../store";
 import type { EditorPaneId, EditorPaneState, EditorTab, GitComparisonState } from "../types";
+import { InspectionReturnBar } from "./InspectionReturnBar";
 
 interface EditorProps {
   onContentChange: (path: string, content: string) => void;
+  onReturnFromInspection?: (location: InspectionReturnLocation) => void;
   flushAutoSave: (path: string) => Promise<void>;
   cancelAutoSave: (path: string) => void;
   onCopySelection: (tab: EditorTab, selection: CodeSelection) => void;
@@ -343,7 +346,7 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onContentChange, flushA
   );
 }
 
-export function EditorSurface({ onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit }: EditorProps) {
+export function EditorSurface({ onContentChange, onReturnFromInspection, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit }: EditorProps) {
   const tabs = useAppStore((state) => state.tabs);
   const panes = useAppStore((state) => state.panes);
   const secondaryOpen = useAppStore((state) => state.secondaryOpen);
@@ -351,6 +354,7 @@ export function EditorSurface({ onContentChange, flushAutoSave, cancelAutoSave, 
   const paneProps = { onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit, secondaryOpen };
 
   return <section className={`editor-area ${secondaryOpen ? "split" : ""}`}>
+    {onReturnFromInspection && <InspectionReturnBar onReturn={onReturnFromInspection} />}
     <div className="editor-layout">
       {paneIds.map((paneId, index) => <div className="editor-pane-slot" key={paneId}>
         {index > 0 && <div className="editor-divider" aria-hidden="true" />}
