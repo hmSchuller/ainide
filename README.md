@@ -53,7 +53,7 @@ The installer pins a `lazygit` binary for your architecture into `~/.ainide/tool
 - **Edit**: Browse a workspace, open files in Monaco, use two editor panes, drag tabs between panes, and search file paths.
 - **Safe editing**: Text buffers auto-save after a short pause, manual save is available, and external changes are surfaced as conflicts instead of silently replacing dirty work.
 - **Review**: Launch an optional local Difit review for the working tree, staged changes, the last commit, or the current branch versus `main`.
-- **Agents**: Run multiple named PTY or ACP agent sessions, focus one session, or pin a second session for side-by-side observation.
+- **Agents**: Run multiple named PTY or ACP agent sessions, focus one session, or pin a second session for side-by-side observation. Provider-reported subagents appear within their ACP parent session when available.
 - **LazyGit**: Open a dedicated full-height Lazygit surface for interactive Git work in the active project.
 - **Edit utilities**: Use real shell and custom PTY sessions from Edit mode through xterm.js.
 - **Reference kit**: Capture a selection or whole file, copy it as plain text with path and line provenance, or explicitly insert it into a selected live agent without submitting it.
@@ -90,11 +90,18 @@ Open files from the workspace explorer or use `Cmd/Ctrl+P` to search file paths.
 
 ### Run agents
 
-Use **Agents** mode to create multiple agent sessions. The new-agent picker lists only configured ACP providers; selecting one starts it immediately, without a title prompt or a PTY fallback. PTY sessions remain real terminals started in the active workspace using the configured agent command. ACP sessions use a configured local provider such as `agent acp` or `opencode acp` and expose structured conversation, tool activity, permissions, and provider-advertised configuration. Switching modes or projects does not intentionally terminate live sessions.
+Use **Agents** mode to supervise multiple local agent sessions. **+ New agent** / **Start an agent** opens the **ACP PROVIDERS** picker, which lists configured providers enabled for the active project. Select an ACP provider or the explicit PTY agent option to start a session. Recent provider sessions appear only when that provider supports listing and resuming them. **Project settings** can disable a configured ACP provider for the project.
 
-An ACP session initially uses the configured provider label as a provisional title. Providers may replace it later via ACP session metadata, while a title set with the existing rename action remains user-owned and is not overwritten by later provider updates.
+ACP and PTY are separate transports:
 
-The editor and explorer can add files or selected lines to the reference kit. Choose a live agent as the target, then use **Paste reference kit** to insert the captured context into its terminal. Insertion is explicit, sends no trailing newline, and does not submit the agent prompt. **Copy kit** remains available as a clipboard fallback.
+- **ACP** starts the configured provider directly over stdio, for example `agent acp` or `opencode acp`. The provider negotiates capabilities, so ainide shows only the structured messages, tools, files, terminal activity, permissions, authentication, commands, and configuration options that it advertises.
+- **PTY** is a real `node-pty` terminal started by the server in the active workspace with `agentCommand` (or `AGENT_COMMAND`). It is an opaque terminal stream; ainide reports process facts and does not infer success or failure from terminal text.
+
+The server owns both kinds of session. Switching modes or projects, or disconnecting the browser, does not intentionally terminate live sessions. PTY input is sent as typed; ACP prompts, cancellation, permission choices, and elicitation responses are explicit user actions. An ACP session starts with the provider label, which the provider may update unless the user renames the session.
+
+ACP providers may report subordinate activity. ainide displays each reported subagent under its parent conversation with its available name or role, activity, and state. Subagents are not separate ainide sessions, and ainide does not invent missing status or add controls for them.
+
+Handoff remains user-managed: copy ordinary prompt text into another session and submit it there. The browser-local **Reference kit** can also copy selected or whole-file text with path and line provenance, insert it into a selected PTY, or attach it to an unsent ACP draft. It is never submitted or persisted without an explicit user action.
 
 ### Edit utilities
 
@@ -106,14 +113,16 @@ Open **LazyGit** mode to work with the active project's Lazygit session in a ful
 
 ### Review Git changes
 
-Open **Review** mode and choose one of these scopes:
+Open **Review** mode and choose one of these shipped scopes:
 
-- Working tree, including untracked files
-- Staged changes
-- Last commit (`HEAD~1` compared with `HEAD`)
-- Branch versus `main`
+- **Working tree**, including untracked files
+- **Staged** changes
+- **Last commit** (`HEAD~1` compared with `HEAD`)
+- **Branch vs main**
 
 ainide starts Difit as a local child process and embeds its ready URL. A running review is reused when switching between Edit and Review; changing projects or closing the project stops the review process. Review mode does not render the Edit utility terminal footer.
+
+Agent-reported files and diffs open in the existing Edit and Review surfaces, with a route back to the originating session. Review is for inspection; use the local **LazyGit** surface or another explicit Git workflow for any changes to repository state.
 
 ## Configuration
 
@@ -129,12 +138,23 @@ Set `AINIDE_CONFIG` to use another path. Example:
 {
   "agentCommand": "claude",
   "defaultShell": "/bin/zsh",
+  "reviewTool": "difit",
   "acpAgents": [
     { "id": "cursor", "label": "Cursor", "command": "agent", "args": ["acp"] },
     { "id": "opencode", "label": "OpenCode", "command": "opencode", "args": ["acp"] }
-  ]
+  ],
+  "projects": {
+    "/Users/you/src/project": {
+      "disabledAgents": ["cursor"],
+      "buildCommands": [
+        { "label": "Tests", "command": "npm test" }
+      ]
+    }
+  }
 }
 ```
+
+`agentCommand`, `defaultShell`, `reviewTool`, `acpAgents`, and `projects` are the supported configuration keys. Each `acpAgents` entry requires `id`, `label`, `command`, and an `args` array; `env` is optional and is passed to that local provider. Project keys are workspace root paths. `disabledAgents` contains configured ACP provider ids, and `buildCommands` contains labelled local commands (at most 20; labels are at most 80 characters and commands at most 500 characters). ACP capabilities and provider-specific options come from provider negotiation.
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -156,9 +176,13 @@ Keep `HOST` set to `127.0.0.1` unless you deliberately want to expose ainide bey
 - No cloud services, accounts, telemetry, or provider-specific AI APIs are required or included. The single exception is the bounded startup release check described above: at most once every six hours, no identifying data, cacheable, and disabled with `AINIDE_NO_UPDATE_CHECK=1`.
 - Recent projects are isolated by browser profile and origin. If profiles share one ainide server, the active project, open-project registry, PTY ownership, and server session snapshots remain global to that server; browser profiles do not provide independent sessions.
 - The picker does not read or write the legacy `ainide:last-workspace` browser value. Existing values are ignored, and each picker session starts at `~`.
-- The local session snapshot stores project paths, open file paths, layout, mode, and terminal descriptions. It does not store file contents, unsaved buffers, terminal scrollback, process IDs, commands, reference kits, or session tokens.
+- The local session snapshot stores project paths, open file paths, pane layout, mode, terminal kinds, agent titles, resumable ACP descriptors, and provider preferences. It does not store workspace contents, unsaved buffers, authentication secrets, session tokens, provider environment values, live protocol streams, terminal scrollback, process IDs, commands, or reference-kit contents.
 - Unsaved buffers survive switching projects in the same browser page, but are not restored after a browser reload.
 - PTYs survive browser disconnects and project switches while the server is running. The terminal owns the server: closing it, or `Ctrl+C`, terminates them. ainide uses no tmux or other external process holder.
+
+## Persistence and lifecycle
+
+Persistence is non-destructive: snapshots contain UI state and safe session descriptors, not conversation transcripts, prompt or reference contents, credentials, or running-process state. On restart, an ACP descriptor is resumed only when its provider supports it; otherwise the session is shown as non-resumable. A restored PTY is a new process. The terminal owns the server: `Ctrl+C`, terminal close, `SIGINT`, `SIGTERM`, and `SIGHUP` stop live PTY, ACP, and review processes as applicable and persist the safe snapshot. Browser disconnect and mode or project switching do not stop live sessions.
 
 ## Project structure
 
