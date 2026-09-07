@@ -48,12 +48,17 @@ export function Explorer({
   const directories = useAppStore((state) => state.directories);
   const expanded = useAppStore((state) => state.expanded);
   const selectedPath = useAppStore((state) => state.selectedPath);
+  const mode = useAppStore((state) => state.mode);
   const recentChanges = useAppStore((state) => state.recentChanges);
   const setDirectory = useAppStore((state) => state.setDirectory);
   const toggleDirectory = useAppStore((state) => state.toggleDirectory);
   const setSelected = useAppStore((state) => state.setSelected);
   const git = useAppStore((state) => state.git);
   const [menu, setMenu] = useState<{ x: number; y: number; entry: FileEntry }>();
+
+  useEffect(() => {
+    if (mode === "review") setMenu(undefined);
+  }, [mode]);
 
   const load = async (path: string) => {
     const state = useAppStore.getState();

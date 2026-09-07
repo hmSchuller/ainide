@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { persistTerminalCollapsed, readTerminalCollapsedPreference, shouldShowReferenceDock, terminalPanelVisible } from "./layout-prefs";
+import { persistTerminalCollapsed, readTerminalCollapsedPreference, shouldDismissExplorerPresentation, shouldShowReferenceDock, terminalPanelVisible, workbenchClassName } from "./layout-prefs";
 import { emptyProjectBag, snapshotFromBag } from "./project-ui";
 
 describe("layout preferences", () => {
@@ -38,5 +38,14 @@ describe("layout preferences", () => {
     expect(terminalPanelVisible("review")).toBe(true);
     expect(terminalPanelVisible("agents")).toBe(true);
     expect(terminalPanelVisible("lazygit")).toBe(true);
+  });
+
+  it("only applies Review workbench chrome suppression to Review", () => {
+    expect(workbenchClassName("review")).toBe("workbench review-mode");
+    expect(shouldDismissExplorerPresentation("review")).toBe(true);
+    for (const mode of ["edit", "agents", "lazygit"] as const) {
+      expect(workbenchClassName(mode)).toBe("workbench");
+      expect(shouldDismissExplorerPresentation(mode)).toBe(false);
+    }
   });
 });

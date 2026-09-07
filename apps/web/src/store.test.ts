@@ -19,7 +19,7 @@ vi.mock("./api", async (importOriginal) => ({
 
 import { getAcpProviderSessions } from "./api";
 import { TERMINAL_COLLAPSED_KEY } from "./layout-prefs";
-import { findPaneForPath, gitComparisonKey, useAppStore, recentSessionsState } from "./store";
+import { findPaneForPath, gitComparisonKey, recentSessionsState, useAppStore } from "./store";
 
 describe("store tab rename", () => {
   beforeEach(() => {
@@ -41,6 +41,25 @@ describe("store tab rename", () => {
     expect(state.panes.primary.tabPaths).toEqual(["src/new.ts"]);
     expect(state.panes.primary.activePath).toBe("src/new.ts");
     expect(findPaneForPath(state.panes, "src/new.ts")).toBe("primary");
+  });
+
+  it("preserves explorer state across Review mode round-trips", () => {
+    const directories = { "": { entries: [], loading: false } };
+    useAppStore.setState({
+      mode: "edit",
+      explorerWidth: 312,
+      directories,
+      expanded: { "": true, src: true },
+      selectedPath: "src/app.ts",
+    });
+
+    useAppStore.getState().setMode("review");
+    useAppStore.getState().setMode("agents");
+    const state = useAppStore.getState();
+    expect(state.explorerWidth).toBe(312);
+    expect(state.directories).toBe(directories);
+    expect(state.expanded).toEqual({ "": true, src: true });
+    expect(state.selectedPath).toBe("src/app.ts");
   });
 
   it("updates language across Swift and Kotlin renames without disturbing the open buffer", () => {

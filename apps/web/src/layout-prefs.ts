@@ -20,3 +20,11 @@ export function shouldShowReferenceDock(itemCount: number): boolean {
 export function terminalPanelVisible(mode: AppMode): boolean {
   return mode === "edit" || mode === "review" || mode === "agents" || mode === "lazygit";
 }
+
+export function workbenchClassName(mode: AppMode): string {
+  return mode === "review" ? "workbench review-mode" : "workbench";
+}
+
+export function shouldDismissExplorerPresentation(mode: AppMode): boolean {
+  return mode === "review";
+}

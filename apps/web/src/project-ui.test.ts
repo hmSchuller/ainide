@@ -21,6 +21,23 @@ describe("project UI bags", () => {
     expect(gitStatusPaths(undefined, { ...previous, files: [{ path: "new.ts", status: "renamed", previousPath: "old.ts" }] })).toEqual(["new.ts", "old.ts"]);
   });
 
+  it("preserves explorer browsing state while switching into and out of Review", () => {
+    const bag = emptyProjectBag();
+    bag.directories = {
+      "": { entries: [{ path: "src", name: "src", type: "directory" }], loading: false },
+      src: { entries: [{ path: "src/app.ts", name: "app.ts", type: "file" }], loading: false },
+    };
+    bag.expanded = { "": true, src: true };
+    bag.selectedPath = "src/app.ts";
+    const before = captureProjectBag(bag);
+    bag.mode = "review";
+    bag.mode = "edit";
+    const after = captureProjectBag(bag);
+    expect(after.directories).toEqual(before.directories);
+    expect(after.expanded).toEqual(before.expanded);
+    expect(after.selectedPath).toBe(before.selectedPath);
+  });
+
   it("keeps dirty buffer contents across switch-and-back", () => {
     const dirty = emptyProjectBag();
     dirty.tabs = [tab({ content: "UNSAVED", savedContent: "clean" })];
