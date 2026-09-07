@@ -1,4 +1,4 @@
-import { promises as fs, realpathSync } from "node:fs";
+import { promises as fs, lstatSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -52,20 +52,6 @@ function inside(root: string, candidate: string): boolean {
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
-function nearestExistingAncestor(candidate: string): string {
-  let current = candidate;
-  while (true) {
-    try {
-      realpathSync(current);
-      return current;
-    } catch {
-      const parent = path.dirname(current);
-      if (parent === current) return current;
-      current = parent;
-    }
-  }
-}
-
 /** Resolve a user-supplied workspace-relative path, including symlink checks. */
 export async function resolveSafePath(root: string, input: string): Promise<string> {
   const parts = partsFor(input);
@@ -73,17 +59,8 @@ export async function resolveSafePath(root: string, input: string): Promise<stri
   const realRoot = await fs.realpath(root);
   const candidate = path.resolve(absoluteRoot, ...parts);
   if (!inside(absoluteRoot, candidate)) throw new UnsafePathError();
-
-  try {
-    const realCandidate = await fs.realpath(candidate);
-    if (!inside(realRoot, realCandidate)) throw new UnsafePathError("Symlink escapes are not allowed");
-    return candidate;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    const ancestor = await fs.realpath(nearestExistingAncestor(candidate));
-    if (!inside(realRoot, ancestor)) throw new UnsafePathError("Symlink escapes are not allowed");
-    return candidate;
-  }
+  await validatePathComponents(absoluteRoot, realRoot, parts);
+  return candidate;
 }
 
 /** Synchronous counterpart, useful to callers that need validation during setup/tests. */
@@ -93,14 +70,52 @@ export function resolveSafePathSync(root: string, input: string): string {
   const realRoot = realpathSync(root);
   const candidate = path.resolve(absoluteRoot, ...parts);
   if (!inside(absoluteRoot, candidate)) throw new UnsafePathError();
-  try {
-    const realCandidate = realpathSync(candidate);
-    if (!inside(realRoot, realCandidate)) throw new UnsafePathError("Symlink escapes are not allowed");
-    return candidate;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    const ancestor = realpathSync(nearestExistingAncestor(candidate));
-    if (!inside(realRoot, ancestor)) throw new UnsafePathError("Symlink escapes are not allowed");
-    return candidate;
+  validatePathComponentsSync(absoluteRoot, realRoot, parts);
+  return candidate;
+}
+
+/**
+ * Validate each existing component, rather than only the nearest existing
+ * ancestor. A dangling symlink can otherwise make a missing child appear safe
+ * and later redirect a write outside the workspace.
+ */
+async function validatePathComponents(absoluteRoot: string, realRoot: string, parts: string[]): Promise<void> {
+  let current = absoluteRoot;
+  for (const part of parts) {
+    current = path.join(current, part);
+    try {
+      const realCurrent = await fs.realpath(current);
+      if (!inside(realRoot, realCurrent) && realCurrent !== realRoot) throw new UnsafePathError("Symlink escapes are not allowed");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      try {
+        const stat = await fs.lstat(current);
+        if (stat.isSymbolicLink()) throw new UnsafePathError("Symlink escapes are not allowed");
+      } catch (lstatError) {
+        if ((lstatError as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw lstatError;
+      }
+      return;
+    }
+  }
+}
+
+function validatePathComponentsSync(absoluteRoot: string, realRoot: string, parts: string[]): void {
+  let current = absoluteRoot;
+  for (const part of parts) {
+    current = path.join(current, part);
+    try {
+      const realCurrent = realpathSync(current);
+      if (!inside(realRoot, realCurrent) && realCurrent !== realRoot) throw new UnsafePathError("Symlink escapes are not allowed");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      try {
+        if (lstatSync(current).isSymbolicLink()) throw new UnsafePathError("Symlink escapes are not allowed");
+      } catch (lstatError) {
+        if ((lstatError as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw lstatError;
+      }
+      return;
+    }
   }
 }

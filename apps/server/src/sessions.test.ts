@@ -59,6 +59,34 @@ describe("session snapshots", () => {
     expect(parseSessionSnapshot({ version: 1, projects: [{ ...project, agentSessions: [{ title: " ", pid: 12 }, { title: 42 }] }] })?.projects[0].agentSessions).toEqual([]);
   });
 
+  it("ignores legacy delegation snapshot data without adopting or rewriting it", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-legacy-delegation-"));
+    const filePath = path.join(dir, "sessions.json");
+    const legacy = {
+      version: 1,
+      projects: [{
+        ...emptyProjectSnapshot({ rootPath: dir, name: "legacy" }),
+        agentSessions: [{ title: "Direct PTY" }],
+        agentSnapshot: {
+          version: 1,
+          delegations: [{ id: "delegation-secret", projectId: dir, goal: "must be ignored" }],
+          worktrees: [{ rootPath: path.join(dir, "worktree") }],
+        },
+      }],
+    };
+    await (await import("node:fs/promises")).writeFile(filePath, `${JSON.stringify(legacy)}\n`, "utf8");
+    const before = await readFile(filePath, "utf8");
+    const loaded = await loadSessionSnapshot(filePath);
+    expect(loaded?.projects[0]).not.toHaveProperty("agentSnapshot");
+    expect(loaded?.projects[0].agentSessions).toEqual([{ title: "Direct PTY" }]);
+    expect(await readFile(filePath, "utf8")).toBe(before);
+    await saveSessionSnapshot(loaded as NonNullable<typeof loaded>, filePath);
+    const rewritten = await readFile(filePath, "utf8");
+    expect(rewritten).not.toContain("delegation-secret");
+    expect(rewritten).not.toContain("must be ignored");
+    expect(rewritten).not.toContain("worktree");
+  });
+
   it("parses ACP descriptors separately from legacy PTY agents", () => {
     const project = {
       rootPath: "/tmp/demo-project",

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { type AcpPromptContext, type AcpPromptRequest, type ProjectSessionSnapshot, parseAcpSessionDescriptors, parseAgentSessionDescriptors, type SessionBootstrap, type WorkspaceEvent } from "@ainide/shared";
+import type { AcpPromptContext, AcpPromptRequest, ProjectSessionSnapshot, SessionBootstrap, WorkspaceEvent } from "@ainide/shared";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -85,10 +85,9 @@ function snapshotPatchFrom(value: unknown): Partial<ProjectSessionSnapshot> | un
     patch.terminalKinds = record.terminalKinds.filter((item): item is ProjectSessionSnapshot["terminalKinds"][number] =>
       item === "agent" || item === "shell" || item === "lazygit" || item === "custom");
   }
-  const agentSessions = parseAgentSessionDescriptors(record.agentSessions);
-  if (agentSessions) patch.agentSessions = agentSessions;
-  const acpSessions = parseAcpSessionDescriptors(record.acpSessions);
-  if (acpSessions) patch.acpSessions = acpSessions;
+  // Session descriptors are server-owned. A browser snapshot may only update
+  // presentation state; accepting process/provider identities here would allow
+  // one project/session to be adopted by another without a live owner.
   return Object.keys(patch).length ? patch : undefined;
 }
 

@@ -295,6 +295,97 @@ describe("project HTTP API", () => {
     }, legacySessionsPath, configPath);
   });
 
+  it("does not let project snapshots replace server-owned live session descriptors", async () => {
+    const root = await tempProject("ainide-api-snapshot-ownership-");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ainide-api-snapshot-ownership-snap-"));
+    const configPath = path.join(dir, "config.json");
+    await writeFile(configPath, JSON.stringify({
+      agentCommand: "sleep 30",
+      defaultShell: "/bin/sh",
+      acpAgents: [{ id: "fake", label: "Fake ACP", command: process.execPath, args: ["-e", fakeAcpProviderScript()] }],
+    }));
+    const sessionsPath = path.join(dir, "sessions.json");
+    await saveSessionSnapshot({
+      version: 1,
+      activeRootPath: root,
+      projects: [{
+        rootPath: root,
+        name: "server-owned",
+        openFilePaths: [],
+        panes: { primary: { tabPaths: [] }, secondary: { tabPaths: [] } },
+        secondaryOpen: false,
+        expandedPaths: [],
+        mode: "edit",
+        terminalKinds: ["agent"],
+        agentSessions: [{ title: "Server-owned PTY" }],
+        acpSessions: [{
+          id: "server-owned-acp",
+          title: "Server-owned ACP",
+          providerId: "fake",
+          acpSessionId: "provider-session",
+          resumability: "resumable",
+          titleSource: "user",
+        }],
+      }],
+    }, sessionsPath);
+
+    await withServer(async (server) => {
+      const headers = auth(server.token);
+      const opened = await server.app.inject({ method: "POST", url: "/api/projects/open", headers, payload: { path: root } });
+      expect(opened.statusCode).toBe(200);
+      const projectId = server.projects.activeId!;
+      const baseline = server.projects.snapshotFor(projectId)!;
+      expect(server.terminals.list(projectId)).toEqual([expect.objectContaining({ kind: "agent", title: "Server-owned PTY", alive: true })]);
+      expect(server.acp.list(projectId)).toEqual([expect.objectContaining({ id: "server-owned-acp", acpSessionId: "provider-session", status: "live" })]);
+
+      const response = await server.app.inject({
+        method: "PUT",
+        url: "/api/projects/snapshot",
+        headers,
+        payload: {
+          projectId,
+          openFilePaths: ["readme.txt"],
+          panes: { primary: { tabPaths: ["readme.txt"], activePath: "readme.txt" }, secondary: { tabPaths: [] } },
+          secondaryOpen: true,
+          expandedPaths: ["src"],
+          mode: "agents",
+          terminalKinds: ["agent", "custom", "forged-kind"],
+          agentSessions: [{ title: "Attacker PTY", pid: 123, command: "evil-command" }],
+          acpSessions: [{
+            id: "attacker-acp",
+            title: "Attacker ACP",
+            providerId: "fake",
+            acpSessionId: "attacker-provider-session",
+            resumability: "resumable",
+            titleSource: "user",
+          }],
+          delegations: [{ id: "attacker-delegation", sessionId: "server-owned-acp" }],
+          agentSnapshot: { delegations: [{ id: "attacker-legacy-delegation" }] },
+          subagents: [{ id: "attacker-subagent", providerId: "fake" }],
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const returned = response.json().snapshot;
+      expect(returned).toMatchObject({
+        openFilePaths: ["readme.txt"],
+        panes: { primary: { tabPaths: ["readme.txt"], activePath: "readme.txt" }, secondary: { tabPaths: [] } },
+        secondaryOpen: true,
+        expandedPaths: ["src"],
+        mode: "agents",
+        terminalKinds: ["agent", "custom"],
+      });
+      expect(returned.agentSessions).toEqual(baseline.agentSessions);
+      expect(returned.acpSessions).toEqual(baseline.acpSessions);
+      expect(returned).not.toHaveProperty("delegations");
+      expect(returned).not.toHaveProperty("agentSnapshot");
+      expect(returned).not.toHaveProperty("subagents");
+      expect(server.projects.snapshotFor(projectId)).toEqual(returned);
+      expect(server.terminals.list(projectId)).toEqual([expect.objectContaining({ kind: "agent", title: "Server-owned PTY", alive: true })]);
+      expect(server.acp.list(projectId)).toEqual([expect.objectContaining({ id: "server-owned-acp", acpSessionId: "provider-session", status: "live" })]);
+    }, sessionsPath, configPath);
+  });
+
   it("limits terminal listing, rename, and removal to the active project", async () => {
     const first = await tempProject("ainide-api-terminal-owner-a-");
     const second = await tempProject("ainide-api-terminal-owner-b-");

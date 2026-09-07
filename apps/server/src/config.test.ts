@@ -188,7 +188,7 @@ describe("build commands configuration", () => {
     await saveConfig(config);
 
     const onDisk = JSON.parse(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
-    expect((onDisk.projects as Record<string, { buildCommands: unknown }>)["__proto__"]?.buildCommands).toEqual(commands);
+    expect((Object.getOwnPropertyDescriptor(onDisk.projects, "__proto__")?.value as { buildCommands?: unknown } | undefined)?.buildCommands).toEqual(commands);
     expect((onDisk.projects as Record<string, { buildCommands: unknown }>)["/my proj/ünïcode"]?.buildCommands).toEqual([{ label: "Lint", command: "npm run lint" }]);
 
     const reloaded = await loadConfig();
