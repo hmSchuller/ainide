@@ -38,11 +38,14 @@ function fakeProviderScript(): string {
      "  else if (message.method === 'session/list') { if (mode === 'list-slow') return; send(message.id, { sessions: process.env.ACP_LIST_FIXTURE ? JSON.parse(process.env.ACP_LIST_FIXTURE) : [] }); }",
     "  else if (message.method === 'session/set_config_option') { if (mode === 'reject-config') fail(message.id, -32001, 'Configuration rejected'); else send(message.id, { configOptions: optionsFor(message.params.configId, message.params.value) }); }",
     "  else if (message.method === 'session/close') send(message.id, {});",
-    "  else if (message.method === 'session/cancel') { if (mode !== 'close-pending') send(activePromptId, { stopReason: 'cancelled' }); }",
+    "  else if (message.method === 'session/cancel') { if (mode !== 'close-pending' && mode !== 'cancel-ignored') send(activePromptId, { stopReason: 'cancelled' }); }",
     "  else if (message.method === 'session/prompt') {",
     "    activePromptId = message.id;",
-    "    if (mode === 'failure') fail(message.id, -32001, 'Provider turn failed');",
+    "    if (mode === 'subagent-invalid') { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'provider-session-1', update: { sessionUpdate: 'subagent_update', subagent: { id: 'missing-provider', state: 'running', token: 'secret' } } } }) + '\\n'); send(activePromptId, { stopReason: 'end_turn' }); }",
+    "    else if (mode === 'subagent') { const emit = (id, state, activity) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'provider-session-1', update: { sessionUpdate: 'subagent_update', subagent: { providerId: 'fake', id, ...(id === 'worker-1' ? { name: 'Indexer' } : { role: 'tests' }), ...(activity ? { activity } : {}), state } } } }) + '\\n'); emit('worker-1', 'running', 'Scanning'); emit('worker-2', 'running', 'Testing'); setTimeout(() => emit('worker-1', 'completed'), 5); send(activePromptId, { stopReason: 'end_turn' }); }",
+    "    else if (mode === 'failure') fail(message.id, -32001, 'Provider turn failed');",
     "    else if (mode === 'exit-prompt') setTimeout(() => process.exit(8), 20);",
+    "    else if (mode === 'cancel-ignored') setTimeout(() => send(activePromptId, { stopReason: 'end_turn' }), 250);",
     "    else if (mode === 'bad-resource') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 101, method: 'fs/read_text_file', params: { sessionId: 'wrong-session', path: '/tmp/secret' } }) + '\\n');",
     "    else if (mode === 'elicitation') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 100, method: 'elicitation/create', params: { mode: 'form', sessionId: 'provider-session-1', message: 'What is your name?', requestedSchema: { type: 'object', properties: { name: { type: 'string', title: 'Name' } }, required: ['name'] } } }) + '\\n');",
     "    else process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 100, method: 'session/request_permission', params: { sessionId: 'provider-session-1', toolCall: { toolCallId: 'tool-1', title: 'Run command', status: 'pending' }, options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' }] } }) + '\\n');",
@@ -97,6 +100,65 @@ describe("ACP session manager", () => {
       expect.objectContaining({ type: "message", role: "agent", text: "permission granted", format: "markdown" }),
       expect.objectContaining({ type: "turn", status: "completed" }),
     ]));
+    await sessions.close();
+  });
+
+  it("keeps provider subagents associated with independent parent sessions", async () => {
+    const events: AcpServerEvent[] = [];
+    const sessions = manager("subagent", (event) => events.push(event));
+    const first = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "First parent" });
+    const second = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Second parent" });
+    await Promise.all([sessions.prompt(first.id, { text: "First" }), sessions.prompt(second.id, { text: "Second" })]);
+    await waitFor(() => events.filter((event) => event.type === "session_event" && event.event.type === "subagent").length >= 6);
+
+    expect(sessions.list("project-1")).toHaveLength(2);
+    expect(sessions.get(first.id)?.subagents).toEqual([
+      { providerId: "fake", id: "worker-1", name: "Indexer", activity: "Scanning", state: "completed" },
+      { providerId: "fake", id: "worker-2", role: "tests", activity: "Testing", state: "running" },
+    ]);
+    expect(sessions.get(second.id)?.subagents).toEqual([
+      { providerId: "fake", id: "worker-1", name: "Indexer", activity: "Scanning", state: "completed" },
+      { providerId: "fake", id: "worker-2", role: "tests", activity: "Testing", state: "running" },
+    ]);
+    const snapshot = sessions.snapshot("project-1");
+    expect(snapshot.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: first.id, subagents: expect.any(Array) }),
+      expect.objectContaining({ id: second.id, subagents: expect.any(Array) }),
+    ]));
+    expect(sessions.descriptors("project-1")).not.toEqual(expect.arrayContaining([expect.objectContaining({ subagents: expect.anything() })]));
+    expect(events.filter((event) => event.type === "session_event" && event.event.type === "subagent").every((event) => event.type !== "session_event" || event.sessionId === first.id || event.sessionId === second.id)).toBe(true);
+    await sessions.close();
+  });
+
+  it("keeps malformed subagent updates as sanitized unknown activity", async () => {
+    const events: AcpServerEvent[] = [];
+    let resourceCalls = 0;
+    const sessions = manager("subagent-invalid", (event) => events.push(event), {
+      readTextFile: async () => { resourceCalls += 1; return { content: "" }; },
+    });
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Malformed" });
+    await sessions.prompt(session.id, { text: "Malformed worker" });
+    await waitFor(() => sessions.history(session.id).some((activity) => activity.type === "unknown" && activity.name === "subagent_update"));
+    expect(sessions.get(session.id)?.subagents).toEqual([]);
+    expect(sessions.list("project-1")).toHaveLength(1);
+    const unknown = sessions.history(session.id).find((activity) => activity.type === "unknown");
+    expect(unknown).toEqual({ type: "unknown", name: "subagent_update", data: { sessionUpdate: "subagent_update", subagent: { id: "missing-provider", state: "running" } } });
+    expect(resourceCalls).toBe(0);
+    await sessions.close();
+  });
+
+  it("keeps providers without subagent data and ordinary tools subagent-free", async () => {
+    const events: AcpServerEvent[] = [];
+    const sessions = manager("prompt", (event) => events.push(event));
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "No subagents" });
+    const prompt = sessions.prompt(session.id, { text: "Only a tool" });
+    await waitFor(() => sessions.get(session.id)?.pendingRequests.length === 1);
+    const request = events.find((event): event is Extract<AcpServerEvent, { type: "session_event" }> => event.type === "session_event" && event.sessionId === session.id && event.event.type === "request");
+    if (!request || request.event.type !== "request") throw new Error("permission request was not emitted");
+    sessions.respondToRequest(session.id, request.event.request.request.requestId, { outcome: "selected", optionId: "allow" });
+    await prompt;
+    expect(sessions.get(session.id)?.subagents).toEqual([]);
+    expect(events.some((event) => event.type === "session_event" && event.event.type === "subagent")).toBe(false);
     await sessions.close();
   });
 
@@ -432,6 +494,23 @@ describe("ACP session manager", () => {
     await sessions.cancel(session.id);
     await prompt;
     expect(sessions.history(session.id)).toEqual(expect.arrayContaining([expect.objectContaining({ type: "turn", status: "cancelled" })]));
+    await sessions.close();
+  });
+
+  it("publishes one cancelled turn before an ignored provider finalizes", async () => {
+    const events: AcpServerEvent[] = [];
+    const sessions = manager("cancel-ignored", (event) => events.push(event));
+    const session = await sessions.create({ projectId: "project-1", rootPath: process.cwd(), providerId: "fake", title: "Delayed cancellation" });
+    const prompt = sessions.prompt(session.id, { text: "Cancel while the provider keeps working" });
+
+    await waitFor(() => sessions.get(session.id)?.activePrompt === true);
+    await sessions.cancel(session.id);
+
+    expect(sessions.history(session.id)).toEqual(expect.arrayContaining([expect.objectContaining({ type: "turn", status: "cancelled" })]));
+    expect(events.filter((event) => event.type === "session_event" && event.sessionId === session.id && event.event.type === "activity" && event.event.activity.type === "turn" && event.event.activity.status === "cancelled")).toHaveLength(1);
+
+    await prompt;
+    expect(sessions.history(session.id).filter((activity) => activity.type === "turn")).toEqual([{ type: "turn", status: "cancelled" }]);
     await sessions.close();
   });
 

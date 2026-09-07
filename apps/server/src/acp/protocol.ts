@@ -20,7 +20,10 @@ export class AcpProtocolAdapter {
   private connection?: acp.ClientConnection;
   private initialization?: acp.InitializeResponse;
 
+  private readonly callbacks: AcpProtocolCallbacks;
+
   constructor(private readonly transport: AcpTransport, callbacks: AcpProtocolCallbacks) {
+    this.callbacks = callbacks;
     this.app = acp.client({ name: "ainide" });
     this.app.onNotification(acp.methods.client.session.update, ({ params }) => callbacks.sessionUpdate(params));
     this.app.onNotification(acp.methods.client.elicitation.complete, ({ params }) => callbacks.completeElicitation(params));
@@ -45,7 +48,18 @@ export class AcpProtocolAdapter {
 
   connect(): void {
     if (this.connection) throw new Error("ACP connection is already open");
-    this.connection = this.app.connect(this.transport.stream);
+    // The SDK's typed router rejects extension session updates before the
+    // callback runs. Tee the wire once so explicitly supported provider
+    // subagent updates, and sanitized unknown variants, can still reach the
+    // normalizer without weakening validation for ACP requests.
+    const [sdkReadable, rawReadable] = this.transport.stream.readable.tee();
+    const typedReadable = sdkReadable.pipeThrough(new TransformStream({
+      transform: (value, controller) => {
+        if (!rawSessionUpdateParams(value)) controller.enqueue(value);
+      },
+    }));
+    this.connection = this.app.connect({ writable: this.transport.stream.writable, readable: typedReadable });
+    void inspectRawSessionUpdates(rawReadable as ReadableStream<unknown>, (params) => this.callbacks.sessionUpdate(params));
   }
 
   async initialize(): Promise<acp.InitializeResponse> {
@@ -117,4 +131,59 @@ export class AcpProtocolAdapter {
     if (!this.connection) throw new Error("ACP connection is not open");
     return this.connection;
   }
+}
+
+const STANDARD_SESSION_UPDATE_NAMES = new Set([
+  "user_message_chunk",
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+  "plan",
+  "plan_update",
+  "plan_removed",
+  "config_option_update",
+  "available_commands_update",
+  "session_info_update",
+  "usage_update",
+  "current_mode_update",
+  "compaction_update",
+  "compaction_summary_chunk",
+]);
+
+async function inspectRawSessionUpdates(
+  readable: ReadableStream<unknown>,
+  callback: (params: acp.SessionNotification) => Promise<void> | void,
+): Promise<void> {
+  const reader = readable.getReader();
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      dispatchRawSessionUpdate(result.value, callback);
+    }
+  } catch {
+    // The SDK connection/transport owns lifecycle errors. Raw inspection is
+    // best effort and must never turn into a provider/process failure.
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function dispatchRawSessionUpdate(value: unknown, callback: (params: acp.SessionNotification) => Promise<void> | void): void {
+  const params = rawSessionUpdateParams(value);
+  if (!params) return;
+  void Promise.resolve(callback(params)).catch(() => undefined);
+}
+
+function rawSessionUpdateParams(value: unknown): acp.SessionNotification | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const message = value as Record<string, unknown>;
+  if (message.method !== acp.methods.client.session.update || !message.params || typeof message.params !== "object" || Array.isArray(message.params)) return undefined;
+  const params = message.params as Record<string, unknown>;
+  if (typeof params.sessionId !== "string" || !params.update || typeof params.update !== "object" || Array.isArray(params.update)) return undefined;
+  const update = params.update as Record<string, unknown>;
+  const name = update.sessionUpdate;
+  if (typeof name === "string" && STANDARD_SESSION_UPDATE_NAMES.has(name)) return undefined;
+  return { sessionId: params.sessionId, update: update as acp.SessionUpdate };
 }

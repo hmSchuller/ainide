@@ -16,6 +16,7 @@ import type {
   AcpSessionCapabilities,
   AcpSessionDescriptor,
   AcpSessionEvent,
+  AcpSubagent,
   AcpTitleSource,
 } from "@ainide/shared";
 import { parseAcpProviderPreferences } from "@ainide/shared";
@@ -74,8 +75,10 @@ type LiveAcpSession = {
   log: AcpEventLog;
   history: AcpActivity[];
   pending: Map<string, PendingRequest>;
+  subagents: Map<string, AcpSubagent>;
   closing: boolean;
   exitHandled: boolean;
+  promptCancellationRequested: boolean;
 };
 
 export type AcpProviderSessionList = AcpProviderSessionsResult;
@@ -357,20 +360,26 @@ export class AcpSessionManager {
     const prompt = [{ type: "text" as const, text: request.text }, ...(request.context ?? []).map(contextBlock)];
     try {
       const result = await record.adapter.prompt(record.public.acpSessionId, prompt);
-      const status = result.stopReason === "cancelled" ? "cancelled" : "completed";
-      this.appendActivity(record, { type: "turn", status });
-    } catch (error) {
-      const status = isCancelled(error) ? "cancelled" : "failed";
-      this.appendActivity(record, { type: "turn", status, message: errorMessage(error, record.provider) });
-      if (!isCancelled(error) && !record.exitHandled) {
-        if (record.connectionClosed && record.transport?.child.stdout?.destroyed) await record.connectionClosed;
+      if (!record.promptCancellationRequested) {
+        const status = result.stopReason === "cancelled" ? "cancelled" : "completed";
+        this.appendActivity(record, { type: "turn", status });
       }
-      if (!isCancelled(error) && !record.exitHandled) {
-        record.public.status = "failed";
-        record.public.error = errorMessage(error, record.provider);
+    } catch (error) {
+      if (!record.promptCancellationRequested) {
+        const cancelled = isCancelled(error);
+        const status = cancelled ? "cancelled" : "failed";
+        this.appendActivity(record, { type: "turn", status, message: errorMessage(error, record.provider) });
+        if (!cancelled && !record.exitHandled) {
+          if (record.connectionClosed && record.transport?.child.stdout?.destroyed) await record.connectionClosed;
+        }
+        if (!cancelled && !record.exitHandled) {
+          record.public.status = "failed";
+          record.public.error = errorMessage(error, record.provider);
+        }
       }
     } finally {
       record.public.activePrompt = false;
+      record.promptCancellationRequested = false;
       if (record.public.status !== "failed" && !record.exitHandled) record.public.status = "live";
       this.publishStatus(record);
     }
@@ -378,6 +387,10 @@ export class AcpSessionManager {
 
   async cancel(id: string): Promise<void> {
     const record = this.require(id);
+    if (record.public.activePrompt && !record.promptCancellationRequested) {
+      record.promptCancellationRequested = true;
+      this.appendActivity(record, { type: "turn", status: "cancelled" });
+    }
     if (!record.adapter || !record.public.acpSessionId) {
       this.cancelPending(record);
       return;
@@ -475,6 +488,7 @@ export class AcpSessionManager {
       availableCommands: [],
       authMethods: [],
       pendingRequests: [],
+      subagents: [],
       activePrompt: false,
       resumability: "unknown",
     };
@@ -485,8 +499,10 @@ export class AcpSessionManager {
       log: new AcpEventLog(),
       history: [],
       pending: new Map(),
+      subagents: new Map(),
       closing: false,
       exitHandled: false,
+      promptCancellationRequested: false,
     };
   }
 
@@ -671,6 +687,15 @@ export class AcpSessionManager {
       record.public.availableCommands = normalized.availableCommands;
       this.publishStatus(record);
     }
+    if (normalized.subagent) {
+      const key = `${normalized.subagent.providerId}\u0000${normalized.subagent.id}`;
+      const previous = record.subagents.get(key);
+      const subagent = previous ? { ...previous, ...normalized.subagent } : normalized.subagent;
+      record.subagents.set(key, subagent);
+      record.public.subagents = [...record.subagents.values()].map((item) => ({ ...item }));
+      this.publish(record, { type: "subagent", sessionId: record.public.id, subagent: { ...subagent } });
+      this.publishStatus(record);
+    }
     for (const activity of normalized.activities) this.appendActivity(record, activity);
   }
 
@@ -821,6 +846,7 @@ function cloneSession(session: AcpSession): AcpSession {
     authMethods: session.authMethods.map((method) => ({ ...method })),
     configOptions: session.configOptions.map((option) => ({ ...option, ...(option.choices ? { choices: option.choices.map((choice) => ({ ...choice })) } : {}) })),
     availableCommands: session.availableCommands.map((command) => ({ ...command })),
+    ...(session.subagents ? { subagents: session.subagents.map((subagent) => ({ ...subagent })) } : {}),
     pendingRequests: session.pendingRequests.map((pending) => pending.type === "permission"
       ? { type: "permission", request: { ...pending.request, options: pending.request.options.map((option) => ({ ...option })) } }
       : { type: "elicitation", request: { ...pending.request, fields: pending.request.fields.map((field) => ({ ...field, ...(field.choices ? { choices: field.choices.map((choice) => ({ ...choice })) } : {}) })) } }),

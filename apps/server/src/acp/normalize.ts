@@ -9,6 +9,8 @@ import type {
   AcpPendingRequest,
   AcpPermissionRequest,
   AcpSessionEvent,
+  AcpSubagent,
+  AcpSubagentState,
   JsonValue,
 } from "@ainide/shared";
 
@@ -22,6 +24,7 @@ const SECRET_KEY = /token|secret|password|api[-_]?key|authorization|credential|^
 
 export interface NormalizedAcpUpdate {
   activities: AcpActivity[];
+  subagent?: AcpSubagent;
   configOptions?: AcpConfigOption[];
   availableCommands?: AcpCommand[];
   title?: string;
@@ -81,6 +84,8 @@ export function normalizeConfigOptions(options: readonly acp.SessionConfigOption
 }
 
 export function normalizeSessionUpdate(update: acp.SessionUpdate): NormalizedAcpUpdate {
+  const subagent = normalizeSubagentUpdate(update);
+  if (subagent) return { activities: [], subagent };
   switch (update.sessionUpdate) {
     case "user_message_chunk":
       return { activities: contentActivity(update.messageId, "user", update.content, "markdown") };
@@ -157,17 +162,24 @@ export function normalizeElicitationRequest(params: acp.CreateElicitationRequest
 }
 
 export function appendAcpActivity(history: AcpActivity[], activity: AcpActivity, maxItems = 2_000): AcpActivity[] {
-  const last = history[history.length - 1];
-  if (last?.type === "message" && activity.type === "message" && last.id === activity.id && last.role === activity.role) {
-    return [...history.slice(0, -1), { ...last, text: boundedText(`${last.text}${activity.text}`) }];
+  if (activity.type === "message") {
+    const index = history.findIndex((item) => item.type === "message" && item.id === activity.id && item.role === activity.role);
+    const existing = history[index];
+    if (index >= 0 && existing?.type === "message") {
+      return [...history.slice(0, index), { ...existing, text: boundedText(`${existing.text}${activity.text}`) }, ...history.slice(index + 1)];
+    }
   }
-  if (last?.type === "tool_call" && activity.type === "tool_call" && last.id === activity.id) {
-    return [...history.slice(0, -1), {
-      ...last,
-      ...activity,
-      input: activity.input ?? last.input,
-      output: activity.output ?? last.output,
-    }];
+  if (activity.type === "tool_call") {
+    const index = history.findIndex((item) => item.type === "tool_call" && item.id === activity.id);
+    const existing = history[index];
+    if (index >= 0 && existing?.type === "tool_call") {
+      return [...history.slice(0, index), {
+        ...existing,
+        ...activity,
+        input: activity.input ?? existing.input,
+        output: activity.output ?? existing.output,
+      }, ...history.slice(index + 1)];
+    }
   }
   const next = [...history, activity];
   return next.length > maxItems ? next.slice(next.length - maxItems) : next;
@@ -184,6 +196,34 @@ export function stabilizeCursorMessageChunk(history: AcpActivity[], activity: Ac
 
 export function activityEvents(sessionId: string, activities: AcpActivity[]): AcpSessionEvent[] {
   return activities.map((activity) => ({ type: "activity", sessionId, activity }));
+}
+
+function normalizeSubagentUpdate(update: object): AcpSubagent | undefined {
+  const record = update as Record<string, unknown>;
+  if (record.sessionUpdate !== "subagent_update" || !record.subagent || typeof record.subagent !== "object" || Array.isArray(record.subagent)) return undefined;
+  const source = record.subagent as Record<string, unknown>;
+  const providerId = boundedOptional(source.providerId, 200);
+  const id = boundedOptional(source.id, 200);
+  if (!providerId || !id) return undefined;
+  const state = subagentState(source.state);
+  return {
+    providerId,
+    id,
+    ...(boundedOptional(source.name, 120) ? { name: boundedOptional(source.name, 120) } : {}),
+    ...(boundedOptional(source.role, 120) ? { role: boundedOptional(source.role, 120) } : {}),
+    ...(boundedOptional(source.activity, 2_000) ? { activity: boundedOptional(source.activity, 2_000) } : {}),
+    ...(state ? { state } : {}),
+  };
+}
+
+function boundedOptional(value: unknown, maximum: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = value.trim();
+  return clean ? clean.slice(0, maximum) : undefined;
+}
+
+function subagentState(value: unknown): AcpSubagentState | undefined {
+  return value === "starting" || value === "working" || value === "running" || value === "completed" || value === "failed" || value === "cancelled" || value === "unknown" ? value : undefined;
 }
 
 function contentActivity(messageId: string | null | undefined, role: "user" | "agent", content: acp.ContentBlock, format?: "plain" | "markdown", thought = false): AcpActivity[] {

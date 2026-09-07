@@ -1,3 +1,4 @@
+import type * as acp from "@agentclientprotocol/sdk";
 import { describe, expect, it } from "vitest";
 import { AcpProtocolAdapter } from "./protocol.js";
 import { openAcpTransport } from "./transport.js";
@@ -10,16 +11,16 @@ function fakeProviderScript(): string {
     "rl.on('line', (line) => {",
     "  const message = JSON.parse(line);",
     "  if (message.method === 'initialize') send(message.id, { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {} } }, authMethods: [{ id: 'local', name: 'Local login' }] });",
-    "  else if (message.method === 'session/new') send(message.id, { sessionId: 'provider-session-1' });",
+    "  else if (message.method === 'session/new') { send(message.id, { sessionId: 'provider-session-1' }); if (process.env.ACP_TEST_SUBAGENT) setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'provider-session-1', update: { sessionUpdate: 'subagent_update', subagent: { providerId: 'fake', id: 'worker-1', name: 'Indexer', state: 'running' } } } }) + '\\n'), 0); }",
     "  else if (message.method === 'session/load') send(message.id, {});",
     "  else if (message.method === 'session/close') send(message.id, {});",
     "});",
   ].join("\n");
 }
 
-function callbacks() {
+function callbacks(sessionUpdates: acp.SessionNotification[] = []) {
   return {
-    sessionUpdate: () => undefined,
+    sessionUpdate: (params: acp.SessionNotification) => { sessionUpdates.push(params); },
     requestPermission: async () => ({ outcome: { outcome: "cancelled" as const } }),
     readTextFile: async () => ({ content: "" }),
     writeTextFile: async () => undefined,
@@ -34,6 +35,19 @@ function callbacks() {
 }
 
 describe("ACP protocol adapter", () => {
+  it("delivers the explicitly supported subagent extension around the typed ACP router", async () => {
+    const updates: acp.SessionNotification[] = [];
+    const transport = openAcpTransport({ command: process.execPath, args: ["-e", fakeProviderScript()], cwd: process.cwd(), env: { ACP_TEST_SUBAGENT: "1" } });
+    const adapter = new AcpProtocolAdapter(transport, callbacks(updates));
+    adapter.connect();
+    await adapter.initialize();
+    await adapter.newSession(process.cwd());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(updates).toEqual([{ sessionId: "provider-session-1", update: { sessionUpdate: "subagent_update", subagent: { providerId: "fake", id: "worker-1", name: "Indexer", state: "running" } } }]);
+    adapter.close();
+    await transport.closed;
+  });
+
   it("negotiates ACP v1 and creates a session through the typed client", async () => {
     const transport = openAcpTransport({ command: process.execPath, args: ["-e", fakeProviderScript()], cwd: process.cwd() });
     const adapter = new AcpProtocolAdapter(transport, callbacks());

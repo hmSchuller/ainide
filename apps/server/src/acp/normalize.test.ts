@@ -1,4 +1,5 @@
 import type * as acp from "@agentclientprotocol/sdk";
+import type { AcpActivity } from "@ainide/shared";
 import { describe, expect, it } from "vitest";
 import { AcpEventLog, appendAcpActivity, normalizeConfigOptions, normalizeElicitationRequest, normalizePermissionRequest, normalizeSessionUpdate, stabilizeCursorMessageChunk } from "./normalize.js";
 
@@ -29,6 +30,67 @@ describe("ACP normalization", () => {
     });
     expect(tool.activities).toContainEqual({ type: "tool_call", id: "tool-1", title: "Read file", status: "running" });
     expect(tool.activities).toContainEqual({ type: "location", path: "/tmp/project/src/index.ts", line: 4 });
+  });
+
+  it("coalesces interleaved message and tool updates in their original positions", () => {
+    const history: AcpActivity[] = [
+      { type: "message", id: "message-1", role: "agent", text: "Hello" },
+      { type: "tool_call", id: "tool-1", title: "Read file", status: "running", input: "src/index.ts" },
+      { type: "unknown", name: "future_update", data: { source: "provider" } },
+    ];
+    const updates: AcpActivity[] = [
+      { type: "message", id: "message-1", role: "agent", text: " world" },
+      { type: "tool_call", id: "tool-1", title: "Read file", status: "completed", output: "contents" },
+    ];
+    const coalesced = updates.reduce((current, activity) => appendAcpActivity(current, activity), history);
+
+    expect(coalesced).toEqual([
+      { type: "message", id: "message-1", role: "agent", text: "Hello world" },
+      { type: "tool_call", id: "tool-1", title: "Read file", status: "completed", input: "src/index.ts", output: "contents" },
+      { type: "unknown", name: "future_update", data: { source: "provider" } },
+    ]);
+  });
+
+  it("keeps coalesced updates within the bounded history", () => {
+    const history: AcpActivity[] = [
+      { type: "message", id: "message-1", role: "agent", text: "Hello" },
+      { type: "unknown", name: "middle", data: null },
+      { type: "tool_call", id: "tool-1", title: "Read file", status: "running" },
+    ];
+    const updated = appendAcpActivity(history, { type: "message", id: "message-1", role: "agent", text: " world" }, 3);
+
+    expect(updated).toHaveLength(3);
+    expect(updated[0]).toEqual({ type: "message", id: "message-1", role: "agent", text: "Hello world" });
+    expect(updated[1]).toEqual({ type: "unknown", name: "middle", data: null });
+    expect(updated[2]).toEqual({ type: "tool_call", id: "tool-1", title: "Read file", status: "running" });
+  });
+
+  it("normalizes only explicitly identified provider subagent updates", () => {
+    expect(normalizeSessionUpdate({
+      sessionUpdate: "subagent_update",
+      subagent: {
+        providerId: "provider-a",
+        id: "worker-1",
+        name: "Indexer",
+        role: "search",
+        activity: "Scanning files",
+        state: "working",
+      },
+    } as unknown as acp.SessionUpdate)).toEqual({
+      activities: [],
+      subagent: {
+        providerId: "provider-a",
+        id: "worker-1",
+        name: "Indexer",
+        role: "search",
+        activity: "Scanning files",
+        state: "working",
+      },
+    });
+    expect(normalizeSessionUpdate({ sessionUpdate: "subagent_update", subagent: { id: "missing-provider" } } as unknown as acp.SessionUpdate).activities[0]).toMatchObject({ type: "unknown", name: "subagent_update" });
+    expect(normalizeSessionUpdate({ sessionUpdate: "tool_call", toolCallId: "tool", title: "delegate", status: "in_progress" } as unknown as acp.SessionUpdate).subagent).toBeUndefined();
+    const bounded = normalizeSessionUpdate({ sessionUpdate: "subagent_update", subagent: { providerId: "provider-a", id: "worker-2", name: "n".repeat(200), state: "invented-state" } } as unknown as acp.SessionUpdate).subagent;
+    expect(bounded).toEqual({ providerId: "provider-a", id: "worker-2", name: "n".repeat(120) });
   });
 
   it("keeps unknown updates inspectable without carrying secret keys", () => {

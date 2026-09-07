@@ -249,12 +249,27 @@ export interface AcpSession {
   configOptions: AcpConfigOption[];
   availableCommands: AcpCommand[];
   pendingRequests: AcpPendingRequest[];
+  /** Provider-reported subordinate activity; never a separate ainide session. */
+  subagents?: AcpSubagent[];
   activePrompt: boolean;
   resumability: "unknown" | "resumable" | "non_resumable" | "restored";
   error?: string;
 }
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+export type AcpSubagentState = "starting" | "working" | "running" | "completed" | "failed" | "cancelled" | "unknown";
+
+/** A provider-owned subordinate activity item. It is never an ainide session. */
+export interface AcpSubagent {
+  /** Provider identity is mandatory; ainide never derives it from activity text. */
+  providerId: string;
+  id: string;
+  name?: string;
+  role?: string;
+  activity?: string;
+  state?: AcpSubagentState;
+}
 
 export type AcpActivity =
   | { type: "message"; id: string; role: "user" | "agent"; text: string; format?: "plain" | "markdown"; thought?: boolean }
@@ -270,6 +285,7 @@ export type AcpActivity =
 export type AcpSessionEvent =
   | { type: "status"; session: AcpSession }
   | { type: "activity"; sessionId: string; activity: AcpActivity }
+  | { type: "subagent"; sessionId: string; subagent: AcpSubagent }
   | { type: "config"; sessionId: string; options: AcpConfigOption[] }
   | { type: "request"; sessionId: string; request: AcpPendingRequest }
   | { type: "request_resolved"; sessionId: string; requestId: string };
@@ -303,6 +319,7 @@ export type AcpRequestResponse =
 export interface AcpSessionDetail {
   session: AcpSession;
   history: AcpActivity[];
+  subagents?: AcpSubagent[];
 }
 
 export type TerminalClientMessage =
