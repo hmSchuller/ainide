@@ -1,5 +1,8 @@
 import type { AcpActivity, AcpServerEvent, AcpSession } from "@ainide/shared";
 
+export type { AcpTurnProjection, AcpTurnProjectionResult, AcpTurnStatus } from "./acp-turns";
+export { boundedAcpActivities, projectAcpTurns } from "./acp-turns";
+
 const MAX_HISTORY_ITEMS = 2_000;
 const MAX_ACTIVITY_TEXT = 1_000_000;
 
@@ -58,6 +61,15 @@ function applySequencedEvent(state: AcpClientState, event: Extract<AcpServerEven
   if (sessionEvent.type === "activity") {
     return { ...state, history: { ...state.history, [event.sessionId]: appendActivity(state.history[event.sessionId] ?? [], sessionEvent.activity) }, lastSequences };
   }
+  if (sessionEvent.type === "subagent") {
+    const session = state.sessions.find((candidate) => candidate.id === event.sessionId);
+    if (!session) return { ...state, lastSequences };
+    const subagents = [...(session.subagents ?? [])];
+    const index = subagents.findIndex((subagent) => subagent.providerId === sessionEvent.subagent.providerId && subagent.id === sessionEvent.subagent.id);
+    if (index < 0) subagents.push(sessionEvent.subagent);
+    else subagents[index] = sessionEvent.subagent;
+    return { ...state, sessions: upsertSession(state.sessions, { ...session, subagents }), lastSequences };
+  }
   const session = state.sessions.find((candidate) => candidate.id === event.sessionId);
   if (!session) return { ...state, lastSequences };
   if (sessionEvent.type === "config") {
@@ -81,12 +93,19 @@ function upsertSession(sessions: AcpSession[], session: AcpSession): AcpSession[
 }
 
 function appendActivity(history: AcpActivity[], activity: AcpActivity): AcpActivity[] {
-  const last = history[history.length - 1];
-  if (last?.type === "message" && activity.type === "message" && last.id === activity.id && last.role === activity.role) {
-    return [...history.slice(0, -1), { ...last, text: `${last.text}${activity.text}`.slice(-MAX_ACTIVITY_TEXT) }];
+  if (activity.type === "message") {
+    const index = history.findIndex((item) => item.type === "message" && item.id === activity.id && item.role === activity.role);
+    const existing = history[index];
+    if (index >= 0 && existing?.type === "message") {
+      return [...history.slice(0, index), { ...existing, text: `${existing.text}${activity.text}`.slice(-MAX_ACTIVITY_TEXT) }, ...history.slice(index + 1)];
+    }
   }
-  if (last?.type === "tool_call" && activity.type === "tool_call" && last.id === activity.id) {
-    return [...history.slice(0, -1), { ...last, ...activity, input: activity.input ?? last.input, output: activity.output ?? last.output }];
+  if (activity.type === "tool_call") {
+    const index = history.findIndex((item) => item.type === "tool_call" && item.id === activity.id);
+    const existing = history[index];
+    if (index >= 0 && existing?.type === "tool_call") {
+      return [...history.slice(0, index), { ...existing, ...activity, input: activity.input ?? existing.input, output: activity.output ?? existing.output }, ...history.slice(index + 1)];
+    }
   }
   return [...history, activity].slice(-MAX_HISTORY_ITEMS);
 }
