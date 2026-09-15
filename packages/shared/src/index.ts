@@ -301,6 +301,7 @@ export interface AcpPromptContext {
   language?: string;
   startLine?: number;
   endLine?: number;
+  comment?: string;
 }
 
 export interface AcpPromptRequest {

@@ -13,6 +13,7 @@ import { Explorer } from "./components/Explorer";
 import { LazyGitSurface } from "./components/LazyGitSurface";
 import { ProjectAgentSettingsDialog } from "./components/ProjectAgentSettingsDialog";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
+import { ReferenceAnnotationDialog } from "./components/ReferenceAnnotationDialog";
 import { ReferenceDock } from "./components/ReferenceDock";
 import { ReviewSurface } from "./components/ReviewSurface";
 import { TerminalPanel } from "./components/TerminalPanel";
@@ -26,7 +27,8 @@ import { shouldDismissExplorerPresentation, shouldShowReferenceDock, terminalPan
 import { PRIMARY_MODE_LABELS, PRIMARY_MODES } from "./navigation";
 import { applyDiskToTabs, captureProjectBag, emptyProjectBag, eventBelongsToActiveProject, explorerPathsForGitChanges, gitChangeType, gitStatusEqual, gitStatusPaths, snapshotFromBag } from "./project-ui";
 import { projectRefFromMutation, readRecentProjects, rememberRecentProject, writeRecentProjects } from "./recent-projects";
-import type { CodeSelection } from "./references";
+import type { AnnotationAnchor } from "./annotation-anchor";
+import type { CodeSelection, ReferenceItem } from "./references";
 import { captureFileReference, captureSelectionReference, captureTextFileReference, copyReference } from "./references";
 import { findPaneForPath, gitComparisonKey, isDirty, useAppStore } from "./store";
 import { lazygitTerminals, shouldStartLazygitSession } from "./terminal-ownership";
@@ -148,6 +150,7 @@ export default function App() {
   const [agentSettingsLoading, setAgentSettingsLoading] = useState(false);
   const [agentSettingsError, setAgentSettingsError] = useState<string>();
   const [startingProviderId, setStartingProviderId] = useState<string>();
+  const [annotationRequest, setAnnotationRequest] = useState<{ reference: ReferenceItem; anchor?: AnnotationAnchor } | null>(null);
   const startingProviderRef = useRef<string>();
   const commandModalRef = useRef<HTMLDivElement>(null);
   useDialogFocus(commandModalRef, "input", () => { setPaletteOpen(false); setQuickOpen(false); }, paletteOpen || quickOpen);
@@ -732,14 +735,23 @@ export default function App() {
     catch (error) { setNotice(error instanceof Error ? error.message : "Terminal could not be started", "error"); }
   };
 
-  const addSelectionReference = (tab: EditorTab, selection: CodeSelection, copy = false) => {
+  const confirmAnnotatedReference = (comment?: string) => {
+    if (!annotationRequest) return;
+    const reference = comment ? { ...annotationRequest.reference, comment } : annotationRequest.reference;
+    useAppStore.getState().addReference(reference);
+    const label = reference.wholeFile ? reference.path : `${reference.path} lines ${reference.startLine}-${reference.endLine}`;
+    setNotice(`Added ${label} to the kit`, "success");
+    setAnnotationRequest(null);
+  };
+
+  const addSelectionReference = (tab: EditorTab, selection: CodeSelection, copy = false, anchor?: AnnotationAnchor) => {
     if (tab.binary || tab.error) { setNotice("This file cannot be copied as text", "error"); return; }
     const reference = captureSelectionReference({ path: tab.path, content: tab.content, language: tab.language, selection });
     if (copy) void copyReference(reference).then((result) => setNotice(result.ok ? "Selection reference copied" : result.error ?? "Could not copy reference", result.ok ? "success" : "error"));
-    else { useAppStore.getState().addReference(reference); setNotice(`Added ${tab.path} lines ${reference.startLine}-${reference.endLine} to the kit`, "success"); }
+    else setAnnotationRequest({ reference, anchor });
   };
 
-  const addWholeFileReference = async (tab: EditorTab | FileEntry, copy = false) => {
+  const addWholeFileReference = async (tab: EditorTab | FileEntry, copy = false, anchor?: AnnotationAnchor) => {
     if (!token) return;
     const path = tab.path;
     const openTab = "content" in tab ? tab : useAppStore.getState().tabs.find((item) => item.path === path);
@@ -750,8 +762,7 @@ export default function App() {
         const result = await copyReference(reference);
         setNotice(result.ok ? "File reference copied" : result.error ?? "Could not copy reference", result.ok ? "success" : "error");
       } else {
-        useAppStore.getState().addReference(reference);
-        setNotice(`Added ${path} to the reference kit`, "success");
+        setAnnotationRequest({ reference, anchor });
       }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "This file cannot be copied as text", "error");
@@ -1055,9 +1066,9 @@ export default function App() {
                flushAutoSave={(path) => autoSaver.flush(path)}
                cancelAutoSave={(path) => autoSaver.cancel(path)}
                onCopySelection={(tab, selection) => addSelectionReference(tab, selection, true)}
-               onAddSelectionToKit={(tab, selection) => addSelectionReference(tab, selection)}
+               onAddSelectionToKit={(tab, selection, anchor) => addSelectionReference(tab, selection, false, anchor)}
                onCopyFile={(tab) => void addWholeFileReference(tab, true)}
-               onAddFileToKit={(tab) => void addWholeFileReference(tab)}
+               onAddFileToKit={(tab, anchor) => void addWholeFileReference(tab, false, anchor)}
              />
              {shouldShowReferenceDock(referenceKit.length) && <ReferenceDock />}
            </div>
@@ -1081,6 +1092,7 @@ export default function App() {
      </div>}
     {providerPickerOpen && <AcpProviderPicker providers={agentSettings?.all ?? []} disabled={agentSettings?.disabled ?? []} loading={agentSettingsLoading} error={agentSettingsError} startingProviderId={startingProviderId} recentSessions={recentAcpSessions} onRetry={() => void loadAgentSettings()} onSelect={(providerId) => void startAcpProvider(providerId)} onRecentSelect={(providerId, sessionId) => void startAcpProvider(providerId, sessionId)} onSelectPty={() => void startPtyAgent()} onClose={() => setProviderPickerOpen(false)} />}
     {projectSettingsOpen && <ProjectAgentSettingsDialog settings={agentSettings} builds={buildCommands} loading={agentSettingsLoading} error={agentSettingsError} onRetry={() => void loadAgentSettings()} onToggle={(providerId, disabled) => void toggleAgentDisabled(providerId, disabled)} onSaveBuilds={saveProjectBuilds} onClose={() => setProjectSettingsOpen(false)} />}
+    {annotationRequest && <ReferenceAnnotationDialog reference={annotationRequest.reference} anchor={annotationRequest.anchor} onConfirm={confirmAnnotatedReference} onCancel={() => setAnnotationRequest(null)} />}
     {/* Palette/quick-open overlay double-clicks dismiss the modal; Escape and close controls exist */}
     {/* biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismiss; the palette owns Escape/close */}
     {(paletteOpen || quickOpen) && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) { setPaletteOpen(false); setQuickOpen(false); } }}>

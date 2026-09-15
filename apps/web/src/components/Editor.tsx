@@ -4,6 +4,8 @@ import { language } from "../file-language";
 import type { InspectionReturnLocation } from "../inspection-navigation";
 import { diffLines } from "../line-diff";
 import { configureMonacoLanguageSurface } from "../monaco-language-surface";
+import type { AnnotationAnchor } from "../annotation-anchor";
+import { editorCursorAnchor, editorSelectionAnchor } from "../annotation-anchor";
 import type { CodeSelection } from "../references";
 import { gitComparisonKey, isDirty, useAppStore } from "../store";
 import type { EditorPaneId, EditorPaneState, EditorTab, GitComparisonState } from "../types";
@@ -15,9 +17,9 @@ interface EditorProps {
   flushAutoSave: (path: string) => Promise<void>;
   cancelAutoSave: (path: string) => void;
   onCopySelection: (tab: EditorTab, selection: CodeSelection) => void;
-  onAddSelectionToKit: (tab: EditorTab, selection: CodeSelection) => void;
+  onAddSelectionToKit: (tab: EditorTab, selection: CodeSelection, anchor?: AnnotationAnchor) => void;
   onCopyFile: (tab: EditorTab) => void;
-  onAddFileToKit: (tab: EditorTab) => void;
+  onAddFileToKit: (tab: EditorTab, anchor?: AnnotationAnchor) => void;
 }
 
 interface DraggedTab {
@@ -104,9 +106,9 @@ interface EditorPaneProps {
   flushAutoSave: (path: string) => Promise<void>;
   cancelAutoSave: (path: string) => void;
   onCopySelection: (tab: EditorTab, selection: CodeSelection) => void;
-  onAddSelectionToKit: (tab: EditorTab, selection: CodeSelection) => void;
+  onAddSelectionToKit: (tab: EditorTab, selection: CodeSelection, anchor?: AnnotationAnchor) => void;
   onCopyFile: (tab: EditorTab) => void;
-  onAddFileToKit: (tab: EditorTab) => void;
+  onAddFileToKit: (tab: EditorTab, anchor?: AnnotationAnchor) => void;
 }
 
 function EditorPane({ paneId, pane, tabs, secondaryOpen, onContentChange, flushAutoSave, cancelAutoSave, onCopySelection, onAddSelectionToKit, onCopyFile, onAddFileToKit }: EditorPaneProps) {
@@ -171,7 +173,8 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onContentChange, flushA
       run: () => {
         const tab = activeTab();
         const value = selection();
-        if (tab && value) onAddSelectionToKit(tab, value);
+        const editor = editorRef.current;
+        if (tab && value) onAddSelectionToKit(tab, value, editor ? editorSelectionAnchor(editor) : undefined);
       },
     });
     editor.addAction({
@@ -191,7 +194,8 @@ function EditorPane({ paneId, pane, tabs, secondaryOpen, onContentChange, flushA
       contextMenuOrder: 4,
       run: () => {
         const tab = activeTab();
-        if (tab) onAddFileToKit(tab);
+        const editor = editorRef.current;
+        if (tab) onAddFileToKit(tab, editor ? editorCursorAnchor(editor) : undefined);
       },
     });
   };

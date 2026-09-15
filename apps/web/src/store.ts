@@ -6,7 +6,7 @@ import { persistBuildSelection, readBuildSelections } from "./build-selections";
 import { language } from "./file-language";
 import { persistTerminalCollapsed, readTerminalCollapsedPreference } from "./layout-prefs";
 import { type AcpPromptDraft, captureProjectBag, emptyPanes, emptyProjectBag, type ProjectUiBag } from "./project-ui";
-import type { ReferenceItem } from "./references";
+import { normalizeReferenceComment, type ReferenceItem } from "./references";
 import type { AppMode, DirectoryState, EditorPaneId, EditorPaneState, EditorTab, GitComparisonRequest, GitComparisonRequestInput, GitComparisonState, Notice, ReviewState } from "./types";
 
 interface AppState {
@@ -88,6 +88,7 @@ interface AppState {
   removeTerminal: (id: string) => void;
   setActiveTerminal: (id: string) => void;
   addReference: (reference: ReferenceItem) => void;
+  updateReferenceComment: (id: string, comment?: string) => void;
   removeReference: (id: string) => void;
   clearReferences: () => void;
   setFocusedSession: (id?: string) => void;
@@ -391,6 +392,9 @@ export const useAppStore = create<AppState>((set) => ({
   removeTerminal: (id) => set((current) => ({ terminals: current.terminals.filter((item) => item.id !== id), activeTerminalId: current.activeTerminalId === id ? current.terminals.find((item) => item.id !== id)?.id : current.activeTerminalId })),
   setActiveTerminal: (activeTerminalId) => set({ activeTerminalId }),
   addReference: (reference) => set((current) => ({ referenceKit: [...current.referenceKit, reference] })),
+  updateReferenceComment: (id, comment) => set((current) => ({
+    referenceKit: current.referenceKit.map((reference) => reference.id === id ? { ...reference, comment: normalizeReferenceComment(comment) } : reference),
+  })),
   removeReference: (id) => set((current) => ({ referenceKit: current.referenceKit.filter((reference) => reference.id !== id) })),
   clearReferences: () => set({ referenceKit: [] }),
   setFocusedSession: (focusedSessionId) => set({ focusedSessionId }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { language } from "./file-language";
-import { appendReferenceItems, captureFileReference, captureMentionedFileReference, captureSelectionReference, captureTextFileReference, copyReferenceKit, promptContextFromReferences, removeGeneratedReferenceMention, serializeReference, serializeReferenceKit } from "./references";
+import { appendReferenceItems, captureFileReference, captureMentionedFileReference, captureSelectionReference, captureTextFileReference, copyReferenceKit, normalizeReferenceComment, promptContextFromReferences, removeGeneratedReferenceMention, serializeReference, serializeReferenceKit } from "./references";
 
 describe("references", () => {
   it("normalizes a selection to inclusive complete lines", () => {
@@ -29,9 +29,39 @@ describe("references", () => {
     const first = captureFileReference({ path: "z.ts", language: "typescript", content: "const end = ` ```;" });
     const second = captureSelectionReference({ path: "a.ts", language: "typescript", content: "a\nb", selection: { startLineNumber: 1, endLineNumber: 1 } });
     const text = serializeReference(first);
-    expect(text).toContain("z.ts (whole file)");
-    expect(text).toContain("````typescript");
+    expect(text).toContain("z.ts\n\n````typescript");
     expect(serializeReferenceKit([first, second])).toBe(`${serializeReference(first)}\n\n${serializeReference(second)}`);
+  });
+
+  it("serializes annotated selections with provenance, comment, and snippet", () => {
+    const lines = Array.from({ length: 48 }, (_, index) => `line ${index + 1}`);
+    lines[41] = "if (user == null) return;";
+    const reference = captureSelectionReference({
+      path: "src/app.ts",
+      language: "typescript",
+      content: lines.join("\n"),
+      selection: { startLineNumber: 42, endLineNumber: 48 },
+    });
+    const annotated = { ...reference, comment: "Fix the null check" };
+    expect(serializeReference(annotated)).toContain("src/app.ts:L42-L48\n\nFix the null check\n\n```typescript\n");
+    expect(serializeReference(annotated)).toContain("if (user == null) return;");
+    expect(promptContextFromReferences([annotated])).toEqual([{
+      path: "src/app.ts",
+      content: reference.content,
+      language: "typescript",
+      startLine: 42,
+      endLine: 48,
+      comment: "Fix the null check",
+    }]);
+  });
+
+  it("serializes whole files with optional comments and omits empty comments", () => {
+    const reference = { ...captureFileReference({ path: "src/types.ts", language: "typescript", content: "export type User = { id: string };" }), comment: "Context for the refactor" };
+    expect(serializeReference(reference)).toContain("src/types.ts\n\nContext for the refactor\n\n```typescript");
+    const plain = captureFileReference({ path: "src/types.ts", language: "typescript", content: "export type User = { id: string };" });
+    expect(serializeReference(plain)).toBe("src/types.ts\n\n```typescript\nexport type User = { id: string };\n```");
+    expect(normalizeReferenceComment("  note  ")).toBe("note");
+    expect(normalizeReferenceComment("   ")).toBeUndefined();
   });
 
   it("preserves Swift and Kotlin language IDs in references and ACP context", () => {
@@ -87,5 +117,20 @@ describe("references", () => {
     const first = captureFileReference({ path: "src/app.ts", language: "typescript", content: "disk" });
     const second = captureFileReference({ path: "src/app.ts", language: "typescript", content: "newer disk" });
     expect(appendReferenceItems([], [first, second])).toEqual([first]);
+  });
+
+  it("includes dock-edited comments when serializing a kit for handoff", () => {
+    const item = { ...captureFileReference({ path: "src/app.ts", language: "typescript", content: "const value = 1;" }), comment: "Check this helper" };
+    expect(serializeReferenceKit([item])).toContain("Check this helper");
+  });
+
+  it("keeps copy-as-reference serialization immediate without requiring a comment", () => {
+    const reference = captureSelectionReference({
+      path: "src/app.ts",
+      language: "typescript",
+      content: "const value = 1;",
+      selection: { startLineNumber: 1, endLineNumber: 1 },
+    });
+    expect(serializeReference(reference)).toBe("src/app.ts:L1\n\n```typescript\nconst value = 1;\n```");
   });
 });

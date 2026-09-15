@@ -13,6 +13,7 @@ export interface ReferenceItem {
   wholeFile: boolean;
   content: string;
   language: string;
+  comment?: string;
   mention?: string;
   mentionStart?: number;
   mentionBefore?: string;
@@ -119,7 +120,19 @@ export async function captureTextFileReference(input: {
   return captureFileReference({ path: input.path, content: result.content, language: input.language });
 }
 
-function scope(item: ReferenceItem): string {
+export function normalizeReferenceComment(comment?: string): string | undefined {
+  const trimmed = comment?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function referenceProvenanceLine(item: ReferenceItem): string {
+  if (item.wholeFile) return item.path;
+  const start = item.startLine ?? 1;
+  const end = item.endLine ?? start;
+  return start === end ? `${item.path}:L${start}` : `${item.path}:L${start}-L${end}`;
+}
+
+export function referenceScopeDescription(item: ReferenceItem): string {
   if (item.wholeFile) return "whole file";
   return `lines ${item.startLine ?? 1}-${item.endLine ?? item.startLine ?? 1}`;
 }
@@ -132,7 +145,10 @@ function fenceFor(content: string): string {
 
 export function serializeReference(item: ReferenceItem): string {
   const fence = fenceFor(item.content);
-  return `--- ${item.path} (${scope(item)}) ---\n${fence}${item.language || "text"}\n${item.content}\n${fence}`;
+  const blocks = [referenceProvenanceLine(item)];
+  if (item.comment) blocks.push(item.comment);
+  blocks.push(`${fence}${item.language || "text"}\n${item.content}\n${fence}`);
+  return blocks.join("\n\n");
 }
 
 export function serializeReferenceKit(items: ReferenceItem[]): string {
@@ -153,6 +169,7 @@ export function promptContextFromReferences(items: ReferenceItem[]): AcpPromptCo
     language: reference.language,
     ...(reference.startLine ? { startLine: reference.startLine } : {}),
     ...(reference.endLine ? { endLine: reference.endLine } : {}),
+    ...(reference.comment ? { comment: reference.comment } : {}),
   }));
 }
 
