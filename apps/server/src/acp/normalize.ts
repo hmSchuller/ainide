@@ -176,6 +176,7 @@ export function appendAcpActivity(history: AcpActivity[], activity: AcpActivity,
       return [...history.slice(0, index), {
         ...existing,
         ...activity,
+        title: coalescedToolCallTitle(existing.title, activity.title, activity.id),
         input: activity.input ?? existing.input,
         output: activity.output ?? existing.output,
       }, ...history.slice(index + 1)];
@@ -268,7 +269,7 @@ function toolUpdateActivities(update: acp.ToolCallUpdate): AcpActivity[] {
   const activities: AcpActivity[] = [{
     type: "tool_call",
     id: update.toolCallId,
-    title: cleanText(update.title, `Tool ${update.toolCallId}`),
+    title: cleanText(update.title, "Tool call"),
     status: toolStatus(update.status),
     ...(update.rawInput !== undefined ? { input: safeString(update.rawInput) } : {}),
     ...(update.rawOutput !== undefined ? { output: safeString(update.rawOutput) } : {}),
@@ -337,6 +338,11 @@ function unknownUpdateName(update: object): string {
 function cleanText(value: string | null | undefined, fallback: string): string {
   const clean = typeof value === "string" ? value.trim() : "";
   return clean || fallback;
+}
+
+function coalescedToolCallTitle(existingTitle: string, incomingTitle: string, toolId: string): string {
+  if (incomingTitle === "Tool call" || incomingTitle === `Tool ${toolId}`) return existingTitle;
+  return incomingTitle || existingTitle;
 }
 
 function cleanOptionalTitle(value: unknown): string | undefined {

@@ -55,14 +55,15 @@ describe("AgentWorkbench", () => {
 
     const markup = renderToStaticMarkup(history.map((activity) => <ActivityView activity={activity} onOpenReference={() => undefined} key={JSON.stringify(activity)} />));
 
-    expect(markup).toContain('class="acp-message user"');
-    expect(markup).toContain('class="acp-message agent"');
+    expect(markup).toContain('class="acp-stream-message user"');
+    expect(markup).toContain('class="acp-stream-message agent"');
     expect(markup).toContain("<h2>User</h2>");
     expect(markup).toContain("<h2>Agent</h2>");
     expect(markup).toContain("<strong>this</strong>");
     expect(markup).toContain("<code>ready</code>");
-    expect(markup).toContain('class="acp-thought"');
-    expect(markup).toContain("<em>thinking</em>");
+    expect(markup).toContain('class="acp-stream-thought"');
+    expect(markup).toContain("Thinking…");
+    expect(markup).not.toContain("<em>thinking</em>");
     expect(markup).not.toContain("dangerouslySetInnerHTML");
   });
 
@@ -83,14 +84,14 @@ describe("AgentWorkbench", () => {
 
     const markup = renderToStaticMarkup(history.map((activity) => <ActivityView activity={activity} onOpenReference={() => undefined} key={JSON.stringify(activity)} />));
 
-    expect(markup).toContain('class="acp-plan"');
-    expect(markup).toContain('class="acp-tool completed"');
-    expect(markup).toContain('class="acp-location"');
-    expect(markup).toContain('class="acp-diff"');
-    expect(markup).toContain('class="acp-terminal-activity"');
+    expect(markup).toContain('class="acp-stream-plan running"');
+    expect(markup).toContain('class="acp-stream-tool completed"');
+    expect(markup).toContain('class="acp-stream-location"');
+    expect(markup).toContain('class="acp-stream-diff"');
+    expect(markup).toContain('class="acp-stream-terminal"');
     expect(markup).toContain("Usage: 12 tokens");
-    expect(markup).toContain('class="acp-turn completed"');
-    expect(markup).toContain('class="acp-unknown"');
+    expect(markup).not.toContain('class="acp-stream-turn"');
+    expect(markup).toContain('class="acp-stream-unknown"');
     expect(markup).toContain("<pre>input</pre>");
     expect(markup).toContain("<pre>terminal text</pre>");
   });
@@ -122,8 +123,24 @@ describe("AgentWorkbench", () => {
     expect(markup).not.toContain("Stop subagent");
   });
 
+  it("does not show a working banner while the provider is active", () => {
+    const session: AcpSession = { id: "active", title: "Active", titleSource: "user", projectId: "/project", providerId: "fake", providerLabel: "Fake", authMethods: [], status: "live", capabilities, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: true, resumability: "resumable" };
+    const markup = renderToStaticMarkup(<AcpConversation session={session} onOpenReference={() => undefined} />);
+    expect(markup).not.toContain("The provider is working on this session.");
+    expect(markup).not.toContain("ACP SESSION");
+    expect(markup).toContain("Working · draft is unsent");
+  });
+
   it("advertises Enter as the primary ACP send shortcut", () => {
     expect(ACP_SEND_LABEL).toBe("Send Enter");
+  });
+
+  it("renders a collapsible agent navigator toggle", () => {
+    const acp: AcpSession = { id: "acp", title: "ACP agent", titleSource: "user", projectId: "/project", providerId: "fake", providerLabel: "Fake provider", authMethods: [], status: "live", capabilities, configOptions: [], availableCommands: [], pendingRequests: [], activePrompt: false, resumability: "non_resumable" };
+    useAppStore.setState({ activeProjectId: "/project", terminals: [], acpSessions: [acp], focusedSessionId: acp.id, pinnedSessionId: undefined });
+    const markup = renderToStaticMarkup(<AgentWorkbench onNewAgent={() => undefined} onOpenReference={() => undefined} />);
+    expect(markup).toContain("agent-navigator-toggle");
+    expect(markup).toContain("Collapse agent list");
   });
 
   it("wraps roving navigation across the session list", () => {

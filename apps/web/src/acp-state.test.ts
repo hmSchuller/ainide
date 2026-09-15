@@ -47,6 +47,16 @@ describe("ACP client event state", () => {
     ]);
   });
 
+  it("preserves tool titles when a provider update omits the title", () => {
+    let state = applyAcpServerEvent(emptyAcpClientState(), { type: "snapshot", projectId: "project-1", sessions: [session()], history: {}, sequence: 0, sequences: { "session-1": 0 } });
+    const activity = (sequence: number, value: AcpActivity): AcpServerEvent => ({ type: "session_event", projectId: "project-1", sessionId: "session-1", sequence, event: { type: "activity", sessionId: "session-1", activity: value } });
+    state = applyAcpServerEvent(state, activity(1, { type: "tool_call", id: "replay-1-23", title: "Shell", status: "running", input: "npm test" }));
+    state = applyAcpServerEvent(state, activity(2, { type: "tool_call", id: "replay-1-23", title: "Tool replay-1-23", status: "completed", output: "ok" }));
+    expect(state.history["session-1"]).toEqual([
+      { type: "tool_call", id: "replay-1-23", title: "Shell", status: "completed", input: "npm test", output: "ok" },
+    ]);
+  });
+
   it("keeps coalesced history bounded while retaining newest unrelated activity", () => {
     const retained: AcpActivity[] = [
       { type: "message", id: "message-1", role: "agent", text: "Hello" },

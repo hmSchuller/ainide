@@ -8,12 +8,13 @@ import { dispatchAcpRecovery, dispatchAcpRollover, freshAcpSessionTitle } from "
 import { authenticateAcpSession, cancelAcpSession, closeAcpSession, closeTerminal, createAcpSession, promptAcpSession, readFile, renameAcpSession, renameTerminal, respondToAcpRequest, rolloverAcpSession, searchFiles, setAcpConfigOption } from "../api";
 import { language } from "../file-language";
 import type { AgentReferenceLocation } from "../inspection-navigation";
+import { persistAgentNavigatorCollapsed, readAgentNavigatorCollapsedPreference } from "../layout-prefs";
 import type { AcpPromptDraft } from "../project-ui";
 import { captureMentionedFileReference, removeGeneratedReferenceMention } from "../references";
 import { useAppStore } from "../store";
 import { agentTerminals } from "../terminal-ownership";
 import { AcpActivityView } from "./AcpActivityView";
-import { AcpTurnNarrative } from "./AcpTurnNarrative";
+import { AcpConversationStream } from "./AcpConversationStream";
 import { TerminalView } from "./TerminalPanel";
 
 interface AgentWorkbenchProps {
@@ -386,17 +387,18 @@ export function AcpConversation({ session, onOpenReference, onOpenDiff }: { sess
   };
   const status = session.status as string;
   const state = status === "auth_required" ? "auth_required" : status === "connecting" ? "connecting" : status === "stopping" ? "stopping" : status === "disconnected" ? "disconnected" : status === "failed" ? "failed" : status === "exited" || status === "non_resumable" ? "exited" : session.pendingRequests.length ? "waiting" : session.activePrompt ? "active" : "ready";
-  const recoveryMessage = state === "exited" ? "This session has exited. Its conversation remains available." : state === "failed" ? "The provider connection failed. Retained activity is still available." : state === "disconnected" ? "The provider connection was lost. Retained activity is still available." : state === "auth_required" ? "Authenticate this session before sending a prompt." : state === "waiting" ? "A provider decision is pending for this session." : state === "active" ? "The provider is working on this session." : state === "connecting" ? "Connecting to the provider; this session remains local to the selected project." : state === "stopping" ? "Stopping this session; wait for confirmed exit." : undefined;
+  const recoveryMessage = state === "exited" ? "This session has exited. Its conversation remains available." : state === "failed" ? "The provider connection failed. Retained activity is still available." : state === "disconnected" ? "The provider connection was lost. Retained activity is still available." : state === "auth_required" ? "Authenticate this session before sending a prompt." : state === "waiting" ? "A provider decision is pending for this session." : undefined;
+  const recoveryTitle = state === "waiting" ? "Decision required" : state === "auth_required" ? "Authentication required" : state === "disconnected" ? "Disconnected" : state === "exited" ? "Session exited" : state === "failed" ? "Provider connection failed" : undefined;
+  const showRecoveryBanner = recoveryMessage !== undefined;
   const canStartFreshSession = state === "failed" || state === "exited" || state === "disconnected";
   return <div className="acp-conversation">
-    <header className="acp-execution-header"><div><span className="eyebrow">ACP SESSION · {session.providerLabel}</span><strong>{session.title}</strong><small>{session.resumability.replaceAll("_", " ")} · session-local conversation</small></div><SessionStatus entry={{ kind: "acp", session }} /></header>
-    {recoveryMessage && <div className={`acp-recovery acp-state-${state}`} role={state === "failed" || state === "exited" || state === "disconnected" ? "alert" : "status"}><strong>{state === "waiting" ? "Decision required" : state === "auth_required" ? "Authentication required" : state === "active" ? "Working" : state === "connecting" ? "Connecting" : state === "stopping" ? "Stopping" : state === "disconnected" ? "Disconnected" : state === "exited" ? "Session exited" : state === "failed" ? "Provider connection failed" : "Ready"}</strong><span>{recoveryMessage}{session.error ? ` ${session.error}` : ""}</span>{canStartFreshSession && <button type="button" onClick={recover}>Start a fresh session</button>}</div>}
+    {showRecoveryBanner && <div className={`acp-recovery acp-state-${state}`} role={state === "failed" || state === "exited" || state === "disconnected" ? "alert" : "status"}><strong>{recoveryTitle}</strong><span>{recoveryMessage}{session.error ? ` ${session.error}` : ""}</span>{canStartFreshSession && <button type="button" onClick={recover}>Start a fresh session</button>}</div>}
     <SubagentList subagents={session.subagents} />
     <ConfigControls session={session} />
     <AuthPanel session={session} />
     {session.pendingRequests.map((request) => <PendingRequest key={request.request.requestId} session={session} request={request} />)}
     <div className="acp-history-wrap" aria-busy={fileReadPending}>
-    <section ref={historyRef} className="acp-history" onScroll={onHistoryScroll} aria-label={`${session.title} conversation`} aria-live="off"><AcpTurnNarrative history={history} pendingRequests={session.pendingRequests} onOpenReference={(path, line, column, target) => onOpenReference(path, line, column, { projectId: session.projectId, sessionId: session.id, ...(target?.turnId ? { turnId: target.turnId } : {}), ...(target?.activityId ? { activityId: target.activityId } : {}) })} onOpenDiff={onOpenDiff ? (path, target) => onOpenDiff(path, { projectId: session.projectId, sessionId: session.id, ...(target?.turnId ? { turnId: target.turnId } : {}), ...(target?.activityId ? { activityId: target.activityId } : {}) }) : undefined} /></section>{historyFollowState.hasNewActivity && <button type="button" className="acp-new-activity" onClick={resumeHistory}>New activity</button>}</div>
+    <section ref={historyRef} className="acp-history cockpit-scroll" onScroll={onHistoryScroll} aria-label={`${session.title} conversation`} aria-live="off"><AcpConversationStream history={history} pendingRequests={session.pendingRequests} onOpenReference={(path, line, column, target) => onOpenReference(path, line, column, { projectId: session.projectId, sessionId: session.id, ...(target?.turnId ? { turnId: target.turnId } : {}), ...(target?.activityId ? { activityId: target.activityId } : {}) })} onOpenDiff={onOpenDiff ? (path, target) => onOpenDiff(path, { projectId: session.projectId, sessionId: session.id, ...(target?.turnId ? { turnId: target.turnId } : {}), ...(target?.activityId ? { activityId: target.activityId } : {}) }) : undefined} /></section>{historyFollowState.hasNewActivity && <button type="button" className="acp-new-activity" onClick={resumeHistory}>New activity</button>}</div>
      <div className="acp-composer"><div className="acp-composer-input"><textarea ref={textareaRef} value={draft.text} onChange={(event) => { updateAcpDraft(session.id, { text: event.target.value }); setCurrentCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} onSelect={(event) => { setCurrentCaret(event.currentTarget.selectionStart); setCompletionDismissed(false); }} placeholder={state === "active" ? "Draft a follow-up while this session works" : "Prompt this ACP session..."} role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls={completionOpen ? completionListId : undefined} aria-activedescendant={completionOpen ? `${completionListId}-${activeCompletionIndex}` : undefined} aria-expanded={completionOpen} onKeyDown={(event) => {
         const action = acpComposerKeyAction({ key: event.key, completionOpen, isComposing: event.nativeEvent.isComposing, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey });
         if (action === "move-down") { event.preventDefault(); setActiveCompletionIndex((current) => fileMatch ? moveAcpFileIndex(current, 1, fileSuggestions.length) : moveAcpCommandIndex(current, 1, commandSuggestions.length)); return; }
@@ -432,6 +434,14 @@ export function AgentWorkbench({ onNewAgent, onOpenReference, onOpenDiff }: Agen
   const pinned = agents.find((entry) => entry.session.id === pinnedSessionId && entry.session.id !== focused?.session.id);
   const visibleAgents = [focused, pinned].filter((entry): entry is AgentEntry => Boolean(entry));
   const liveAgents = agents.filter(isLive);
+  const [navigatorCollapsed, setNavigatorCollapsed] = useState(() => readAgentNavigatorCollapsedPreference());
+  const toggleNavigator = () => {
+    setNavigatorCollapsed((current) => {
+      const next = !current;
+      persistAgentNavigatorCollapsed(next);
+      return next;
+    });
+  };
 
   const close = async (entry: AgentEntry) => {
     if (isLive(entry) && !window.confirm(`Close the running ${entry.session.title} agent?`)) return;
@@ -466,14 +476,22 @@ export function AgentWorkbench({ onNewAgent, onOpenReference, onOpenDiff }: Agen
   };
 
   return <section className="agent-workbench" aria-label="Agents workbench">
-    <aside className="agent-navigator">
-      <header className="agent-navigator-header"><div><span className="eyebrow">AGENT WORKBENCH</span><strong>{agents.length} {agents.length === 1 ? "agent" : "agents"}</strong></div><button type="button" className="primary-button compact" onClick={onNewAgent}>+ New agent</button></header>
+    <aside className={`agent-navigator${navigatorCollapsed ? " collapsed" : ""}`}>
+      <header className="agent-navigator-header">
+        <div className="agent-navigator-title"><span className="eyebrow">AGENT WORKBENCH</span><strong>{agents.length} {agents.length === 1 ? "agent" : "agents"}</strong></div>
+        <div className="agent-navigator-actions">
+          {!navigatorCollapsed && <button type="button" className="primary-button compact" onClick={onNewAgent}>+ New agent</button>}
+          <button type="button" className="agent-navigator-toggle" onClick={toggleNavigator} aria-expanded={!navigatorCollapsed} aria-label={navigatorCollapsed ? "Expand agent list" : "Collapse agent list"} title={navigatorCollapsed ? "Expand agent list" : "Collapse agent list"}>{navigatorCollapsed ? "›" : "‹"}</button>
+        </div>
+      </header>
+      {!navigatorCollapsed && <>
       <div className="agent-navigator-body"><section className="session-group"><div className="session-group-heading"><span>AGENTS</span><b>{agents.length}</b></div>{agents.length === 0 ? <div className="session-empty">No agent sessions yet.<button type="button" onClick={onNewAgent}>Start an agent</button></div> : agents.map((entry) => <div className={`session-row ${entry.session.id === focused?.session.id ? "selected" : ""}`} key={`${entry.kind}-${entry.session.id}`}>
         <button type="button" className="session-select" onClick={() => focus(entry)} title={`Focus ${entry.session.title}`}><span className="session-title">{entry.session.title}</span><span className="session-provider">{entry.kind === "acp" ? entry.session.providerLabel : entry.session.command}</span><SessionStatus entry={entry} /></button>
         <div className="session-actions"><button type="button" onClick={() => { setFocusedSession(entry.session.id); setReferenceTarget(isLive(entry) ? entry.session.id : undefined); }} aria-label={`Target ${entry.session.title}`} title="Use as handoff target">◎</button><button type="button" onClick={() => setPinnedSession(pinned?.session.id === entry.session.id ? undefined : entry.session.id)} aria-label={`${pinned?.session.id === entry.session.id ? "Unpin" : "Pin"} ${entry.session.title}`} title={pinned?.session.id === entry.session.id ? "Unpin agent" : "Pin agent"}>{pinned?.session.id === entry.session.id ? "▣" : "□"}</button><button type="button" onClick={() => void rename(entry)} aria-label={`Rename ${entry.session.title}`} title="Rename agent">✎</button><button type="button" onClick={() => void close(entry)} aria-label={`Close ${entry.session.title}`} title="Close agent">×</button></div>
       </div>)}</section></div>
       <footer className="agent-target"><label htmlFor="agent-target">HANDOFF TARGET</label><select id="agent-target" value={referenceTargetId ?? ""} onChange={(event) => setReferenceTarget(event.target.value || undefined)}><option value="">No live agent selected</option>{liveAgents.map((entry) => <option value={entry.session.id} key={`${entry.kind}-${entry.session.id}`}>{entry.session.title}{entry.kind === "acp" ? ` · ${entry.session.providerLabel}` : ""}</option>)}</select><span>{referenceTargetId && liveAgents.some((entry) => entry.session.id === referenceTargetId) ? "Ready for reference insertion" : "Choose a live agent from here or Edit"}</span></footer>
+      </>}
     </aside>
-    <div className="agent-stage">{visibleAgents.length ? <div className={`agent-terminal-grid ${visibleAgents.length > 1 ? "split" : ""}`}>{visibleAgents.map((entry) => <article className={`agent-terminal-card ${entry.kind === "acp" ? "acp-card" : ""}`} key={`${entry.kind}-${entry.session.id}`}><header><div><span className="eyebrow">{entry.session.id === focused?.session.id ? "FOCUSED SESSION" : "PINNED SESSION"}</span><strong>{entry.session.title}</strong></div><SessionStatus entry={entry} /></header>{entry.kind === "acp" ? <AcpConversation session={entry.session} onOpenReference={onOpenReference} onOpenDiff={onOpenDiff} /> : <TerminalView session={entry.session} onOpenReference={(path, line, column) => onOpenReference(path, line, column, { projectId: entry.session.projectId, sessionId: entry.session.id })} />}</article>)}</div> : <div className="agent-empty"><span className="agent-empty-mark">◎</span><p className="eyebrow">NO AGENTS RUNNING</p><h2>Start a parallel work window.</h2><p>Use named sessions for implementation, planning, or any other task you want to watch.</p><button type="button" className="primary-button" onClick={onNewAgent}>Start first agent</button></div>}</div>
+    <div className="agent-stage">{visibleAgents.length ? <div className={`agent-terminal-grid ${visibleAgents.length > 1 ? "split" : ""}`}>{visibleAgents.map((entry) => <article className={`agent-terminal-card ${entry.kind === "acp" ? "acp-card" : ""}`} key={`${entry.kind}-${entry.session.id}`}><header><div><span className="eyebrow">{entry.session.id === focused?.session.id ? "FOCUSED SESSION" : "PINNED SESSION"}{entry.kind === "acp" ? ` · ${entry.session.providerLabel}` : ""}</span><strong>{entry.session.title}</strong>{entry.kind === "acp" && <small>{entry.session.resumability.replaceAll("_", " ")}</small>}</div><SessionStatus entry={entry} /></header>{entry.kind === "acp" ? <AcpConversation session={entry.session} onOpenReference={onOpenReference} onOpenDiff={onOpenDiff} /> : <TerminalView session={entry.session} onOpenReference={(path, line, column) => onOpenReference(path, line, column, { projectId: entry.session.projectId, sessionId: entry.session.id })} />}</article>)}</div> : <div className="agent-empty"><span className="agent-empty-mark">◎</span><p className="eyebrow">NO AGENTS RUNNING</p><h2>Start a parallel work window.</h2><p>Use named sessions for implementation, planning, or any other task you want to watch.</p><button type="button" className="primary-button" onClick={onNewAgent}>Start first agent</button></div>}</div>
   </section>;
 }

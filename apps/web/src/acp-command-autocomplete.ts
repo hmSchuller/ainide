@@ -27,6 +27,59 @@ export const CLIENT_ACP_COMMANDS: readonly AcpClientCommand[] = [
   { kind: "new", name: "new", description: "Start a fresh context on this provider" },
 ];
 
+function isInOrderSubsequence(segment: string, query: string): boolean {
+  let queryIndex = 0;
+  for (const char of segment) {
+    if (char === query[queryIndex]) {
+      queryIndex++;
+      if (queryIndex === query.length) return true;
+    }
+  }
+  return queryIndex === query.length;
+}
+
+export function commandMatchScore(name: string, query: string): number {
+  const normalizedName = name.toLowerCase();
+  const normalizedQuery = query.toLowerCase();
+
+  if (!normalizedQuery) return 0;
+
+  const maxScore = normalizedQuery.length <= 2 ? 2 : normalizedQuery.length === 3 ? 3 : 4;
+  const scores: number[] = [];
+
+  if (normalizedName.startsWith(normalizedQuery)) {
+    scores.push(1);
+  }
+
+  for (const segment of normalizedName.split("-")) {
+    if (segment.startsWith(normalizedQuery)) {
+      scores.push(2);
+    }
+    if (normalizedQuery.length >= 3 && segment.includes(normalizedQuery)) {
+      scores.push(3);
+    }
+    if (normalizedQuery.length >= 4 && isInOrderSubsequence(segment, normalizedQuery)) {
+      scores.push(4);
+    }
+  }
+
+  const validScores = scores.filter((score) => score <= maxScore);
+  if (validScores.length === 0) return -1;
+  return Math.min(...validScores);
+}
+
+function suggestionKindOrder(kind: AcpCommandSuggestion["kind"]): number {
+  return kind === "client" ? 0 : 1;
+}
+
+function compareSuggestions(left: AcpCommandSuggestion, right: AcpCommandSuggestion, query: string): number {
+  const scoreDifference = commandMatchScore(left.command.name, query) - commandMatchScore(right.command.name, query);
+  if (scoreDifference !== 0) return scoreDifference;
+  const kindDifference = suggestionKindOrder(left.kind) - suggestionKindOrder(right.kind);
+  if (kindDifference !== 0) return kindDifference;
+  return left.command.name.localeCompare(right.command.name);
+}
+
 export function matchAcpCommandToken(text: string, caret: number): AcpCommandMatch | undefined {
   const position = Math.max(0, Math.min(caret, text.length));
   const beforeCaret = text.slice(0, position);
@@ -37,17 +90,23 @@ export function matchAcpCommandToken(text: string, caret: number): AcpCommandMat
 }
 
 export function filterAcpSuggestions(commands: AcpCommand[], query: string): AcpCommandSuggestion[] {
-  const normalizedQuery = query.toLowerCase();
-  const matches = (name: string) => name.toLowerCase().startsWith(normalizedQuery);
-  return [
-    ...CLIENT_ACP_COMMANDS.filter((command) => matches(command.name)).map((command): AcpCommandSuggestion => ({ kind: "client", command })),
-    ...commands.filter((command) => matches(command.name)).map((command): AcpCommandSuggestion => ({ kind: "provider", command })),
+  const suggestions: AcpCommandSuggestion[] = [
+    ...CLIENT_ACP_COMMANDS.map((command): AcpCommandSuggestion => ({ kind: "client", command })),
+    ...commands.map((command): AcpCommandSuggestion => ({ kind: "provider", command })),
   ];
+
+  return suggestions
+    .filter((suggestion) => commandMatchScore(suggestion.command.name, query) >= 0)
+    .sort((left, right) => compareSuggestions(left, right, query));
 }
 
 export function filterAcpCommands(commands: AcpCommand[], query: string): AcpCommand[] {
-  const normalizedQuery = query.toLowerCase();
-  return commands.filter((command) => command.name.toLowerCase().startsWith(normalizedQuery));
+  return commands
+    .filter((command) => commandMatchScore(command.name, query) >= 0)
+    .sort((left, right) => {
+      const scoreDifference = commandMatchScore(left.name, query) - commandMatchScore(right.name, query);
+      return scoreDifference || left.name.localeCompare(right.name);
+    });
 }
 
 export function moveAcpCommandIndex(index: number, direction: -1 | 1, count: number): number {

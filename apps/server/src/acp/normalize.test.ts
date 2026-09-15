@@ -51,6 +51,23 @@ describe("ACP normalization", () => {
     ]);
   });
 
+  it("preserves tool titles when a provider update omits the title", () => {
+    const history: AcpActivity[] = [
+      { type: "tool_call", id: "replay-1-23", title: "Shell", status: "running", input: "npm test" },
+    ];
+    const update = normalizeSessionUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "replay-1-23",
+      status: "completed",
+      rawOutput: "ok",
+    } as acp.SessionUpdate).activities[0];
+    expect(update?.type).toBe("tool_call");
+    const coalesced = appendAcpActivity(history, update!);
+    expect(coalesced).toEqual([
+      { type: "tool_call", id: "replay-1-23", title: "Shell", status: "completed", input: "npm test", output: "ok" },
+    ]);
+  });
+
   it("keeps coalesced updates within the bounded history", () => {
     const history: AcpActivity[] = [
       { type: "message", id: "message-1", role: "agent", text: "Hello" },

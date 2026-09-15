@@ -119,12 +119,12 @@ The system SHALL display model and other session configuration options returned 
 
 ### Requirement: Users can send prompts and receive structured session updates
 
-The system SHALL let the user send a text prompt with optional supported context to a selected ACP session and SHALL render updates associated with that session in arrival order. The rendered session history SHALL distinguish user content, agent content, tool calls, plans, file locations, diffs, terminal output, usage information, completion, failure, and cancellation when those updates are provided. The text of every user or agent message activity SHALL be rendered as safe Markdown for display, while the original source text SHALL remain unchanged for prompt transport, history, and streaming accumulation. Markdown rendering SHALL not interpret untrusted raw HTML as executable markup or activate unsafe URL schemes.
+The system SHALL let the user send a text prompt with optional supported context to a selected ACP session and SHALL render updates associated with that session in chronological arrival order as a single conversation stream. The stream SHALL present each activity once at the position it arrived; the workbench SHALL NOT split the history into a summarized headline layer and a separate hidden or secondary raw-activity log. User and agent messages SHALL read as conversational content without uppercase section labels such as "Prompt", "Final response", or role badges as the primary presentation. Tool calls, plans, terminal activity, diffs, locations, usage, thoughts, completion markers, and unknown updates SHALL appear inline in the stream with compact, human-readable presentation; protocol details such as tool input or output JSON, full diff text, or unknown payload data SHALL be available only through explicit expand actions rather than as the default view. The rendered session history SHALL still distinguish user content, agent content, tool calls, plans, file locations, diffs, terminal output, usage information, completion, failure, and cancellation when those updates are provided. The text of every user or agent message activity SHALL be rendered as safe Markdown for display, while the original source text SHALL remain unchanged for prompt transport, history, and streaming accumulation. Markdown rendering SHALL not interpret untrusted raw HTML as executable markup or activate unsafe URL schemes.
 
 #### Scenario: Agent streams a tool-assisted response
 
 - **WHEN** the user sends a prompt and the agent emits message chunks followed by a tool call and further message chunks
-- **THEN** the workbench appends the chunks to the correct conversation, shows the tool's progress and result, renders each user or agent message as safe Markdown, and does not merge the activity into another session
+- **THEN** the workbench appends the chunks to the correct conversation in order, shows the tool step inline with its reported title and status, renders each user or agent message as safe Markdown, and does not merge the activity into another session
 
 #### Scenario: User message contains Markdown
 
@@ -139,7 +139,7 @@ The system SHALL let the user send a text prompt with optional supported context
 #### Scenario: Markdown arrives in streamed chunks
 
 - **WHEN** additional chunks extend an existing user or agent message while its Markdown structure is incomplete or changes as the message grows
-- **THEN** the workbench safely reparses the accumulated source and updates the rendered message without losing message order or treating the chunks as separate messages
+- **THEN** the workbench safely reparses the accumulated source and updates the rendered message in place without losing message order or treating the chunks as separate messages
 
 #### Scenario: Message contains unsafe markup or a URL
 
@@ -154,7 +154,22 @@ The system SHALL let the user send a text prompt with optional supported context
 #### Scenario: Unknown update content is received
 
 - **WHEN** the agent sends an update variant that the current UI does not understand
-- **THEN** the session remains connected, preserves enough metadata for inspection or debugging, and reports the update without treating it as a completed prompt
+- **THEN** the session remains connected, preserves enough metadata for inspection or debugging, and reports the update inline without treating it as a completed prompt
+
+#### Scenario: One prompt produces mixed activity
+
+- **WHEN** an ACP prompt produces user messages, tool calls, intermediate agent messages, file locations, and completion in sequence
+- **THEN** the conversation shows the full sequence in order without duplicating messages in a separate summary section or burying the sequence behind a collapsed raw-activity drawer
+
+#### Scenario: Tool call details are inspectable on demand
+
+- **WHEN** a tool call includes input or output payload data
+- **THEN** the stream shows a compact tool row with the reported title and status by default and exposes the payload only when the user expands that tool step
+
+#### Scenario: Agent thought content is present
+
+- **WHEN** the provider emits an agent message marked as thought content
+- **THEN** the stream presents it as secondary, collapsed, or visually de-emphasized content that does not compete with the main agent response
 
 ### Requirement: Users can respond to ACP permission and elicitation requests
 
@@ -272,7 +287,7 @@ The system SHALL recognize an ACP `available_commands_update` as the provider's 
 
 ### Requirement: ACP composers provide provider command autocomplete and conventional submission keys
 
-The system SHALL provide slash-command autocomplete in the composer for a selected ACP session using only that session's current advertised commands. Typing `/` or a partial slash command SHALL filter the available suggestions. Selecting a suggestion SHALL insert `/<command-name> ` at the caret, preserve the remaining draft text, and SHALL NOT submit the prompt. When command suggestions are not open, plain `Enter` SHALL submit a valid prompt and `Shift+Enter` SHALL insert a newline without submitting. When suggestions are open, plain `Enter` SHALL select the active suggestion and `Shift+Enter` SHALL insert a newline without submitting. `Cmd/Ctrl+Enter` SHALL remain an explicit submit alias.
+The system SHALL provide slash-command autocomplete in the composer for a selected ACP session using only that session's current advertised commands. Typing `/` or a partial slash command SHALL filter the available suggestions using ranked, segment-aware matching. When the typed query is non-empty, suggestions SHALL be limited to commands whose name matches by full-name prefix, hyphen-segment prefix, segment substring, or (for queries of at least four characters) in-order subsequence within a hyphen segment. Suggestions SHALL be ordered by match quality, with stronger matches appearing before weaker ones, and ties broken deterministically by command name. Selecting a suggestion SHALL insert `/<command-name> ` at the caret, preserve the remaining draft text, and SHALL NOT submit the prompt. When command suggestions are not open, plain `Enter` SHALL submit a valid prompt and `Shift+Enter` SHALL insert a newline without submitting. When suggestions are open, plain `Enter` SHALL select the active suggestion and `Shift+Enter` SHALL insert a newline without submitting. `Cmd/Ctrl+Enter` SHALL remain an explicit submit alias.
 
 #### Scenario: User discovers provider commands
 
@@ -281,8 +296,28 @@ The system SHALL provide slash-command autocomplete in the composer for a select
 
 #### Scenario: User filters provider commands
 
-- **WHEN** the user types additional command-name characters after `/`
-- **THEN** the composer limits suggestions to commands matching the typed command prefix
+- **WHEN** the user types additional command-name characters after `/` that match the start of one or more command names
+- **THEN** the composer limits suggestions to those commands and ranks exact and prefix matches ahead of weaker matches
+
+#### Scenario: User filters namespaced commands by action segment
+
+- **WHEN** the user types a partial query after `/` that matches a hyphen segment but not the full command-name prefix, such as `/apply` against `opsx-apply`
+- **THEN** the composer includes that command in the suggestions
+
+#### Scenario: User filters commands by partial segment text
+
+- **WHEN** the user types a partial query after `/` of at least three characters that appears inside a hyphen segment, such as `/plore` against `opsx-explore`
+- **THEN** the composer includes that command in the suggestions ahead of unrelated commands
+
+#### Scenario: User filters commands with a typo-tolerant partial
+
+- **WHEN** the user types a partial query after `/` of at least four characters that matches an in-order subsequence within a hyphen segment, such as `/opose` against `opsx-propose`
+- **THEN** the composer includes that command in the suggestions
+
+#### Scenario: Short partial queries stay conservative
+
+- **WHEN** the user types one or two characters after `/`
+- **THEN** the composer limits suggestions to full-name prefix and hyphen-segment prefix matches only
 
 #### Scenario: User selects a command
 

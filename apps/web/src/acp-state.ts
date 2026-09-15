@@ -104,8 +104,19 @@ function appendActivity(history: AcpActivity[], activity: AcpActivity): AcpActiv
     const index = history.findIndex((item) => item.type === "tool_call" && item.id === activity.id);
     const existing = history[index];
     if (index >= 0 && existing?.type === "tool_call") {
-      return [...history.slice(0, index), { ...existing, ...activity, input: activity.input ?? existing.input, output: activity.output ?? existing.output }, ...history.slice(index + 1)];
+      return [...history.slice(0, index), {
+        ...existing,
+        ...activity,
+        title: coalescedToolCallTitle(existing.title, activity.title, activity.id),
+        input: activity.input ?? existing.input,
+        output: activity.output ?? existing.output,
+      }, ...history.slice(index + 1)];
     }
   }
   return [...history, activity].slice(-MAX_HISTORY_ITEMS);
+}
+
+function coalescedToolCallTitle(existingTitle: string, incomingTitle: string, toolId: string): string {
+  if (incomingTitle === "Tool call" || incomingTitle === `Tool ${toolId}`) return existingTitle;
+  return incomingTitle || existingTitle;
 }

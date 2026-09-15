@@ -1,6 +1,7 @@
 import type { AppMode } from "./types";
 
 export const TERMINAL_COLLAPSED_KEY = "ainide:terminal-collapsed";
+export const AGENT_NAVIGATOR_COLLAPSED_KEY = "ainide:agent-navigator-collapsed";
 
 export function readTerminalCollapsedPreference(storage: Pick<Storage, "getItem"> = localStorage): boolean {
   const value = storage.getItem(TERMINAL_COLLAPSED_KEY);
@@ -22,9 +23,22 @@ export function terminalPanelVisible(mode: AppMode): boolean {
 }
 
 export function workbenchClassName(mode: AppMode): string {
-  return mode === "review" ? "workbench review-mode" : "workbench";
+  if (mode === "review") return "workbench review-mode";
+  if (mode === "agents") return "workbench agents-mode";
+  return "workbench";
 }
 
 export function shouldDismissExplorerPresentation(mode: AppMode): boolean {
-  return mode === "review";
+  return mode === "review" || mode === "agents";
+}
+
+export function readAgentNavigatorCollapsedPreference(storage: Pick<Storage, "getItem"> = localStorage): boolean {
+  const value = storage.getItem(AGENT_NAVIGATOR_COLLAPSED_KEY);
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return false;
+}
+
+export function persistAgentNavigatorCollapsed(collapsed: boolean, storage: Pick<Storage, "setItem"> = localStorage): void {
+  storage.setItem(AGENT_NAVIGATOR_COLLAPSED_KEY, String(collapsed));
 }

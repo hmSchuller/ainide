@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { persistTerminalCollapsed, readTerminalCollapsedPreference, shouldDismissExplorerPresentation, shouldShowReferenceDock, terminalPanelVisible, workbenchClassName } from "./layout-prefs";
+import { persistTerminalCollapsed, readTerminalCollapsedPreference, readAgentNavigatorCollapsedPreference, persistAgentNavigatorCollapsed, shouldDismissExplorerPresentation, shouldShowReferenceDock, terminalPanelVisible, workbenchClassName } from "./layout-prefs";
 import { emptyProjectBag, snapshotFromBag } from "./project-ui";
 
 describe("layout preferences", () => {
@@ -40,12 +40,25 @@ describe("layout preferences", () => {
     expect(terminalPanelVisible("lazygit")).toBe(true);
   });
 
-  it("only applies Review workbench chrome suppression to Review", () => {
+  it("hides the explorer in Review and Agents modes", () => {
     expect(workbenchClassName("review")).toBe("workbench review-mode");
+    expect(workbenchClassName("agents")).toBe("workbench agents-mode");
     expect(shouldDismissExplorerPresentation("review")).toBe(true);
-    for (const mode of ["edit", "agents", "lazygit"] as const) {
+    expect(shouldDismissExplorerPresentation("agents")).toBe(true);
+    for (const mode of ["edit", "lazygit"] as const) {
       expect(workbenchClassName(mode)).toBe("workbench");
       expect(shouldDismissExplorerPresentation(mode)).toBe(false);
     }
+  });
+
+  it("defaults the agent navigator to expanded and persists collapse preference", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    };
+    expect(readAgentNavigatorCollapsedPreference(storage)).toBe(false);
+    persistAgentNavigatorCollapsed(true, storage);
+    expect(readAgentNavigatorCollapsedPreference(storage)).toBe(true);
   });
 });
