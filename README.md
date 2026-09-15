@@ -141,7 +141,8 @@ Set `AINIDE_CONFIG` to use another path. Example:
   "reviewTool": "difit",
   "acpAgents": [
     { "id": "cursor", "label": "Cursor", "command": "agent", "args": ["acp"] },
-    { "id": "opencode", "label": "OpenCode", "command": "opencode", "args": ["acp"] }
+    { "id": "opencode", "label": "OpenCode", "command": "opencode", "args": ["acp"] },
+    { "id": "opencode-mise", "label": "OpenCode (mise)", "prefixCommand": "mise", "prefixArgs": ["exec", "--"], "command": "opencode", "args": ["acp"] }
   ],
   "projects": {
     "/Users/you/src/project": {
@@ -154,7 +155,7 @@ Set `AINIDE_CONFIG` to use another path. Example:
 }
 ```
 
-`agentCommand`, `defaultShell`, `reviewTool`, `acpAgents`, and `projects` are the supported configuration keys. Each `acpAgents` entry requires `id`, `label`, `command`, and an `args` array; `env` is optional and is passed to that local provider. Project keys are workspace root paths. `disabledAgents` contains configured ACP provider ids, and `buildCommands` contains labelled local commands (at most 20; labels are at most 80 characters and commands at most 500 characters). ACP capabilities and provider-specific options come from provider negotiation.
+`agentCommand`, `defaultShell`, `reviewTool`, `acpAgents`, and `projects` are the supported configuration keys. Each `acpAgents` entry requires `id`, `label`, `command`, and an `args` array; `env` is optional and is passed to that local provider. Optional `prefixCommand` and `prefixArgs` run an argv-only wrapper in front of the provider command, for example `mise exec --` or `direnv exec .`, without using a shell. Project keys are workspace root paths. `disabledAgents` contains configured ACP provider ids, and `buildCommands` contains labelled local commands (at most 20; labels are at most 80 characters and commands at most 500 characters). ACP capabilities and provider-specific options come from provider negotiation.
 
 | Variable | Description | Default |
 | --- | --- | --- |

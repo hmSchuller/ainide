@@ -31,6 +31,19 @@ describe("ACP configuration", () => {
     ])).toEqual([{ id: "cursor", label: "Cursor", command: "agent", args: ["acp"], env: { API_KEY: "local" } }]);
   });
 
+  it("parses optional per-agent ACP prefix command and args", () => {
+    expect(parseAcpAgents([
+      { id: "opencode", label: "OpenCode", command: "opencode", args: ["acp"], prefixCommand: "mise", prefixArgs: ["exec", "--"] },
+      { id: "plain", label: "Plain", command: "agent", args: ["acp"] },
+      { id: "prefix-only", label: "Prefix only", command: "agent", args: ["acp"], prefixCommand: "direnv", prefixArgs: [] },
+      { id: "args-without-prefix", label: "Bad", command: "agent", args: ["acp"], prefixArgs: ["exec", "--"] },
+    ])).toEqual([
+      { id: "opencode", label: "OpenCode", command: "opencode", args: ["acp"], prefixCommand: "mise", prefixArgs: ["exec", "--"] },
+      { id: "plain", label: "Plain", command: "agent", args: ["acp"] },
+      { id: "prefix-only", label: "Prefix only", command: "agent", args: ["acp"], prefixCommand: "direnv" },
+    ]);
+  });
+
   it("loads ACP providers without changing the PTY command", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ainide-config-"));
     tempDirectories.push(directory);

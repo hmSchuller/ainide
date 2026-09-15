@@ -12,6 +12,8 @@ export interface AcpAgentConfig {
   label: string;
   command: string;
   args: string[];
+  prefixCommand?: string;
+  prefixArgs?: string[];
   env?: Record<string, string>;
 }
 
@@ -112,10 +114,22 @@ export function parseAcpAgents(value: unknown): AcpAgentConfig[] | undefined {
     const command = cleanConfigText(record.command, 500);
     const args = parseStringArray(record.args);
     if (!id || !label || !command || !args || ids.has(id)) return [];
+    const prefixCommand = record.prefixCommand === undefined ? undefined : cleanConfigText(record.prefixCommand, 500);
+    if (record.prefixCommand !== undefined && !prefixCommand) return [];
+    const prefixArgs = record.prefixArgs === undefined ? undefined : parseStringArray(record.prefixArgs);
+    if (record.prefixArgs !== undefined && !prefixArgs) return [];
+    if (prefixArgs !== undefined && !prefixCommand) return [];
     const env = parseEnvironment(record.env);
     if (record.env !== undefined && !env) return [];
     ids.add(id);
-    return [{ id, label, command, args, ...(env ? { env } : {}) }];
+    return [{
+      id,
+      label,
+      command,
+      args,
+      ...(prefixCommand ? { prefixCommand, ...(prefixArgs?.length ? { prefixArgs } : {}) } : {}),
+      ...(env ? { env } : {}),
+    }];
   });
   return agents.length ? agents : undefined;
 }

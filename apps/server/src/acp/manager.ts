@@ -23,7 +23,7 @@ import { parseAcpProviderPreferences } from "@ainide/shared";
 import type { AcpAgentConfig, AinideConfig } from "../config.js";
 import { AcpEventLog, appendAcpActivity, normalizeConfigOptions, normalizeElicitationRequest, normalizePermissionRequest, normalizeSessionUpdate, stabilizeCursorMessageChunk } from "./normalize.js";
 import { AcpProtocolAdapter, type AcpProtocolCallbacks } from "./protocol.js";
-import { type AcpProcessExit, type AcpTransport, openAcpTransport } from "./transport.js";
+import { acpTransportSpecFromAgent, type AcpProcessExit, type AcpTransport, openAcpTransport } from "./transport.js";
 
 export type AcpPermissionResponse =
   | { outcome: "selected"; optionId: string }
@@ -205,7 +205,7 @@ export class AcpSessionManager {
     if (!provider.command) return { available: false, sessions: [] };
     let transport: AcpTransport | undefined;
     try {
-      transport = openAcpTransport({ command: provider.command, args: provider.args, cwd: rootPath, env: provider.env });
+      transport = openAcpTransport(acpTransportSpecFromAgent(provider, rootPath));
       const adapter = new AcpProtocolAdapter(transport, transientCallbacks());
       adapter.connect();
       const initialized = await withTimeout(adapter.initialize(), this.listTimeoutMs);
@@ -509,7 +509,7 @@ export class AcpSessionManager {
   private async connectRecord(record: LiveAcpSession): Promise<void> {
     if (!record.provider.command) throw new AcpSessionError(503, "ACP provider is unavailable");
     record.public.status = "connecting";
-    const transport = openAcpTransport({ command: record.provider.command, args: record.provider.args, cwd: record.rootPath, env: record.provider.env });
+    const transport = openAcpTransport(acpTransportSpecFromAgent(record.provider, record.rootPath));
     record.transport = transport;
     const adapter = new AcpProtocolAdapter(transport, this.protocolCallbacks(record));
     record.adapter = adapter;

@@ -1,6 +1,7 @@
 import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import { ndJsonStream, type Stream } from "@agentclientprotocol/sdk";
+import type { AcpAgentConfig } from "../config.js";
 
 const MAX_STDERR_BYTES = 16_384;
 
@@ -26,6 +27,20 @@ export interface AcpTransport {
 }
 
 export type AcpSpawn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+
+export function resolveAcpSpawnArgv(agent: Pick<AcpAgentConfig, "command" | "args" | "prefixCommand" | "prefixArgs">): { command: string; args: string[] } {
+  const prefixCommand = agent.prefixCommand?.trim();
+  if (!prefixCommand) return { command: agent.command, args: [...agent.args] };
+  return { command: prefixCommand, args: [...(agent.prefixArgs ?? []), agent.command, ...agent.args] };
+}
+
+export function acpTransportSpecFromAgent(
+  agent: Pick<AcpAgentConfig, "command" | "args" | "prefixCommand" | "prefixArgs" | "env">,
+  cwd: string,
+): AcpTransportSpec {
+  const { command, args } = resolveAcpSpawnArgv(agent);
+  return { command, args, cwd, ...(agent.env ? { env: agent.env } : {}) };
+}
 
 export function openAcpTransport(spec: AcpTransportSpec, spawnProcess: AcpSpawn = spawn): AcpTransport {
   const child = spawnProcess(spec.command, [...spec.args], {
